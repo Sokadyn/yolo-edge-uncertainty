@@ -1,0 +1,14 @@
+path: ../datasets/foggy_cityscapes  # dataset root dir. Adjust this to your actual path
+train: images/train  # train images (relative to 'path')
+val: images/val  # val images (relative to 'path')
+test:
+
+names:
+  0: person
+  1: car
+  2: bicycle
+  3: rider
+  4: motorcycle
+  5: bus
+  6: truck
+  7: train

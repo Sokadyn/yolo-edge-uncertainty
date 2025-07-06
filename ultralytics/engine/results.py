@@ -1660,3 +1660,432 @@ class OBB(BaseTensor):
             if isinstance(x, torch.Tensor)
             else np.stack([x.min(1), y.min(1), x.max(1), y.max(1)], -1)
         )
+
+
+
+class ResultsUncertainty(Results):
+    """
+    A class for storing and manipulating inference results that also contain uncertainty values.
+
+    This class provides comprehensive functionality for handling inference results from various
+    Ultralytics models, including detection, segmentation, classification, and pose estimation.
+    It supports visualization, data export, and various coordinate transformations.
+
+    Attributes:
+        orig_img (numpy.ndarray): The original image as a numpy array.
+        orig_shape (Tuple[int, int]): Original image shape in (height, width) format.
+        boxes (Boxes | None): Detected bounding boxes.
+        masks (Masks | None): Segmentation masks.
+        probs (Probs | None): Classification probabilities.
+        keypoints (Keypoints | None): Detected keypoints.
+        obb (OBB | None): Oriented bounding boxes.
+        speed (dict): Dictionary containing inference speed information.
+        names (dict): Dictionary mapping class indices to class names.
+        path (str): Path to the input image file.
+        save_dir (str | None): Directory to save results.
+
+    Methods:
+        update: Update the Results object with new detection data.
+        cpu: Return a copy of the Results object with all tensors moved to CPU memory.
+        numpy: Convert all tensors in the Results object to numpy arrays.
+        cuda: Move all tensors in the Results object to GPU memory.
+        to: Move all tensors to the specified device and dtype.
+        new: Create a new Results object with the same image, path, names, and speed attributes.
+        plot: Plot detection results on an input RGB image.
+        show: Display the image with annotated inference results.
+        save: Save annotated inference results image to file.
+        verbose: Return a log string for each task in the results.
+        save_txt: Save detection results to a text file.
+        save_crop: Save cropped detection images to specified directory.
+        summary: Convert inference results to a summarized dictionary.
+        to_df: Convert detection results to a Pandas Dataframe.
+        to_json: Convert detection results to JSON format.
+        to_csv: Convert detection results to a CSV format.
+        to_xml: Convert detection results to XML format.
+        to_html: Convert detection results to HTML format.
+        to_sql: Convert detection results to an SQL-compatible format.
+
+    Examples:
+        >>> results = model("path/to/image.jpg")
+        >>> result = results[0]  # Get the first result
+        >>> boxes = result.boxes  # Get the boxes for the first result
+        >>> masks = result.masks  # Get the masks for the first result
+        >>> for result in results:
+        >>>     result.plot()  # Plot detection results
+    """
+
+    def __init__(
+        self,
+        orig_img: np.ndarray,
+        path: str,
+        names: Dict[int, str],
+        boxes: Optional[torch.Tensor] = None,
+        masks: Optional[torch.Tensor] = None,
+        probs: Optional[torch.Tensor] = None,
+        keypoints: Optional[torch.Tensor] = None,
+        obb: Optional[torch.Tensor] = None,
+        speed: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """
+        Initialize the Results class for storing and manipulating inference results.
+
+        Args:
+            orig_img (numpy.ndarray): The original image as a numpy array.
+            path (str): The path to the image file.
+            names (dict): A dictionary of class names.
+            boxes (torch.Tensor | None): A 2D tensor of bounding box coordinates for each detection.
+            masks (torch.Tensor | None): A 3D tensor of detection masks, where each mask is a binary image.
+            probs (torch.Tensor | None): A 1D tensor of probabilities of each class for classification task.
+            keypoints (torch.Tensor | None): A 2D tensor of keypoint coordinates for each detection.
+            obb (torch.Tensor | None): A 2D tensor of oriented bounding box coordinates for each detection.
+            speed (Dict | None): A dictionary containing preprocess, inference, and postprocess speeds (ms/image).
+
+        Examples:
+            >>> results = model("path/to/image.jpg")
+            >>> result = results[0]  # Get the first result
+            >>> boxes = result.boxes  # Get the boxes for the first result
+            >>> masks = result.masks  # Get the masks for the first result
+
+        Notes:
+            For the default pose model, keypoint indices for human body pose estimation are:
+            0: Nose, 1: Left Eye, 2: Right Eye, 3: Left Ear, 4: Right Ear
+            5: Left Shoulder, 6: Right Shoulder, 7: Left Elbow, 8: Right Elbow
+            9: Left Wrist, 10: Right Wrist, 11: Left Hip, 12: Right Hip
+            13: Left Knee, 14: Right Knee, 15: Left Ankle, 16: Right Ankle
+        """
+        self.orig_img = orig_img
+        self.orig_shape = orig_img.shape[:2]
+        self.boxes = BoxesUncertainty(boxes, self.orig_shape) if boxes is not None else None  # native size boxes
+        self.masks = Masks(masks, self.orig_shape) if masks is not None else None  # native size or imgsz masks
+        self.probs = Probs(probs) if probs is not None else None
+        self.keypoints = Keypoints(keypoints, self.orig_shape) if keypoints is not None else None
+        self.obb = OBB(obb, self.orig_shape) if obb is not None else None
+        self.speed = speed if speed is not None else {"preprocess": None, "inference": None, "postprocess": None}
+        self.names = names
+        self.path = path
+        self.save_dir = None
+        self._keys = "boxes", "masks", "probs", "keypoints", "obb"
+
+
+    def update(
+        self,
+        boxes: Optional[torch.Tensor] = None,
+        masks: Optional[torch.Tensor] = None,
+        probs: Optional[torch.Tensor] = None,
+        obb: Optional[torch.Tensor] = None,
+        keypoints: Optional[torch.Tensor] = None,
+    ):
+        """
+        Update the Results object with new detection data.
+
+        This method allows updating the boxes, masks, probabilities, and oriented bounding boxes (OBB) of the
+        Results object. It ensures that boxes are clipped to the original image shape.
+
+        Args:
+            boxes (torch.Tensor | None): A tensor of shape (N, 6) containing bounding box coordinates and
+                confidence scores. The format is (x1, y1, x2, y2, conf, class).
+            masks (torch.Tensor | None): A tensor of shape (N, H, W) containing segmentation masks.
+            probs (torch.Tensor | None): A tensor of shape (num_classes,) containing class probabilities.
+            obb (torch.Tensor | None): A tensor of shape (N, 5) containing oriented bounding box coordinates.
+            keypoints (torch.Tensor | None): A tensor of shape (N, 17, 3) containing keypoints.
+
+        Examples:
+            >>> results = model("image.jpg")
+            >>> new_boxes = torch.tensor([[100, 100, 200, 200, 0.9, 0]])
+            >>> results[0].update(boxes=new_boxes)
+        """
+        if boxes is not None:
+            self.boxes = BoxesUncertainty(ops.clip_boxes(boxes, self.orig_shape), self.orig_shape)
+        if masks is not None:
+            self.masks = Masks(masks, self.orig_shape)
+        if probs is not None:
+            self.probs = probs
+        if obb is not None:
+            self.obb = OBB(obb, self.orig_shape)
+        if keypoints is not None:
+            self.keypoints = Keypoints(keypoints, self.orig_shape)
+
+
+
+    def new(self):
+        """
+        Create a new ResultsUncertainty object with the same image, path, names, and speed attributes.
+
+        Returns:
+            (ResultsUncertainty): A new ResultsUncertainty object with copied attributes from the original instance.
+
+        Examples:
+            >>> results = model("path/to/image.jpg")
+            >>> new_result = results[0].new()
+        """
+        return ResultsUncertainty(orig_img=self.orig_img, path=self.path, names=self.names, speed=self.speed)
+
+    def plot(
+        self,
+        conf: bool = True,
+        line_width: Optional[float] = None,
+        font_size: Optional[float] = None,
+        font: str = "Arial.ttf",
+        pil: bool = False,
+        img: Optional[np.ndarray] = None,
+        im_gpu: Optional[torch.Tensor] = None,
+        kpt_radius: int = 5,
+        kpt_line: bool = True,
+        labels: bool = True,
+        boxes: bool = True,
+        masks: bool = True,
+        probs: bool = True,
+        show: bool = False,
+        save: bool = False,
+        filename: Optional[str] = None,
+        color_mode: str = "class",
+        txt_color: Tuple[int, int, int] = (255, 255, 255),
+    ) -> np.ndarray:
+        """
+        Plot detection results on an input RGB image.
+
+        Args:
+            conf (bool): Whether to plot detection confidence scores.
+            line_width (float | None): Line width of bounding boxes. If None, scaled to image size.
+            font_size (float | None): Font size for text. If None, scaled to image size.
+            font (str): Font to use for text.
+            pil (bool): Whether to return the image as a PIL Image.
+            img (np.ndarray | None): Image to plot on. If None, uses original image.
+            im_gpu (torch.Tensor | None): Normalized image on GPU for faster mask plotting.
+            kpt_radius (int): Radius of drawn keypoints.
+            kpt_line (bool): Whether to draw lines connecting keypoints.
+            labels (bool): Whether to plot labels of bounding boxes.
+            boxes (bool): Whether to plot bounding boxes.
+            masks (bool): Whether to plot masks.
+            probs (bool): Whether to plot classification probabilities.
+            show (bool): Whether to display the annotated image.
+            save (bool): Whether to save the annotated image.
+            filename (str | None): Filename to save image if save is True.
+            color_mode (str): Specify the color mode, e.g., 'instance' or 'class'.
+            txt_color (tuple[int, int, int]): Specify the RGB text color for classification task.
+
+        Returns:
+            (np.ndarray): Annotated image as a numpy array.
+
+        Examples:
+            >>> results = model("image.jpg")
+            >>> for result in results:
+            >>>     im = result.plot()
+            >>>     im.show()
+        """
+        assert color_mode in {"instance", "class"}, f"Expected color_mode='instance' or 'class', not {color_mode}."
+        if img is None and isinstance(self.orig_img, torch.Tensor):
+            img = (self.orig_img[0].detach().permute(1, 2, 0).contiguous() * 255).to(torch.uint8).cpu().numpy()
+
+        names = self.names
+        is_obb = self.obb is not None
+        pred_boxes, show_boxes = self.obb if is_obb else self.boxes, boxes
+        pred_masks, show_masks = self.masks, masks
+        pred_probs, show_probs = self.probs, probs
+        annotator = Annotator(
+            deepcopy(self.orig_img if img is None else img),
+            line_width,
+            font_size,
+            font,
+            pil or (pred_probs is not None and show_probs),  # Classify tasks default to pil=True
+            example=names,
+        )
+
+        # Plot Segment results
+        if pred_masks and show_masks:
+            if im_gpu is None:
+                img = LetterBox(pred_masks.shape[1:])(image=annotator.result())
+                im_gpu = (
+                    torch.as_tensor(img, dtype=torch.float16, device=pred_masks.data.device)
+                    .permute(2, 0, 1)
+                    .flip(0)
+                    .contiguous()
+                    / 255
+                )
+            idx = (
+                pred_boxes.id
+                if pred_boxes.is_track and color_mode == "instance"
+                else pred_boxes.cls
+                if pred_boxes and color_mode == "class"
+                else reversed(range(len(pred_masks)))
+            )
+            annotator.masks(pred_masks.data, colors=[colors(x, True) for x in idx], im_gpu=im_gpu)
+
+        # Plot Detect results
+        if pred_boxes is not None and show_boxes:
+            for i, d in enumerate(reversed(pred_boxes)):
+                c, d_conf, id = int(d.cls), float(d.conf) if conf else None, int(d.id.item()) if d.is_track else None
+                d_unc = float(d.unc) if hasattr(d, 'unc') else None
+                name = ("" if id is None else f"id:{id} ") + names[c]
+                label = (f"{name} c:{d_conf:.2f}" if conf else name) if labels else None
+                label += f" u:{d_unc:.2f}" if d_unc is not None else ""
+                box = d.xyxyxyxy.squeeze() if is_obb else d.xyxy.squeeze()
+                annotator.box_label(
+                    box,
+                    label,
+                    color=colors(
+                        c
+                        if color_mode == "class"
+                        else id
+                        if id is not None
+                        else i
+                        if color_mode == "instance"
+                        else None,
+                        True,
+                    ),
+                )
+
+        # Plot Classify results
+        if pred_probs is not None and show_probs:
+            text = "\n".join(f"{names[j] if names else j} {pred_probs.data[j]:.2f}" for j in pred_probs.top5)
+            x = round(self.orig_shape[0] * 0.03)
+            annotator.text([x, x], text, txt_color=txt_color, box_color=(64, 64, 64, 128))  # RGBA box
+
+        # Plot Pose results
+        if self.keypoints is not None:
+            for i, k in enumerate(reversed(self.keypoints.data)):
+                annotator.kpts(
+                    k,
+                    self.orig_shape,
+                    radius=kpt_radius,
+                    kpt_line=kpt_line,
+                    kpt_color=colors(i, True) if color_mode == "instance" else None,
+                )
+
+        # Show results
+        if show:
+            annotator.show(self.path)
+
+        # Save results
+        if save:
+            annotator.save(filename or f"results_{Path(self.path).name}")
+
+        return annotator.im if pil else annotator.result()
+
+
+
+    def save_txt(self, txt_file: Union[str, Path], save_conf: bool = False) -> str:
+        """
+        Save detection results to a text file.
+
+        Args:
+            txt_file (str | Path): Path to the output text file.
+            save_conf (bool): Whether to include confidence scores (+ uncertainty scores) in the output.
+
+        Returns:
+            (str): Path to the saved text file.
+        """
+        is_obb = self.obb is not None
+        boxes = self.obb if is_obb else self.boxes
+        masks = self.masks
+        probs = self.probs
+        kpts = self.keypoints
+        texts = []
+        if probs is not None:
+            # Classify
+            [texts.append(f"{probs.data[j]:.2f} {self.names[j]}") for j in probs.top5]
+        elif boxes:
+            # Detect/segment/pose
+            for j, d in enumerate(boxes):
+                c, conf, id = int(d.cls), float(d.conf), int(d.id.item()) if d.is_track else None
+                unc = float(d.unc)
+                line = (c, *(d.xyxyxyxyn.view(-1) if is_obb else d.xywhn.view(-1)))
+                if masks:
+                    seg = masks[j].xyn[0].copy().reshape(-1)  # reversed mask.xyn, (n,2) to (n*2)
+                    line = (c, *seg)
+                if kpts is not None:
+                    kpt = torch.cat((kpts[j].xyn, kpts[j].conf[..., None]), 2) if kpts[j].has_visible else kpts[j].xyn
+                    line += (*kpt.reshape(-1).tolist(),)
+                line += (conf,) * save_conf + (() if id is None else (id,))
+                line += (unc,) * save_conf
+                texts.append(("%g " * len(line)).rstrip() % line)
+
+        if texts:
+            Path(txt_file).parent.mkdir(parents=True, exist_ok=True)  # make directory
+            with open(txt_file, "a", encoding="utf-8") as f:
+                f.writelines(text + "\n" for text in texts)
+
+        return str(txt_file)
+
+
+    def summary(self, normalize: bool = False, decimals: int = 5) -> List[Dict[str, Any]]:
+        """
+        Convert inference results to a summarized dictionary with optional normalization for box coordinates and additional uncertainty estimates.
+        """
+        # Create list of detection dictionaries
+        results = []
+        if self.probs is not None:
+            class_id = self.probs.top1
+            results.append(
+                {
+                    "name": self.names[class_id],
+                    "class": class_id,
+                    "confidence": round(self.probs.top1conf.item(), decimals),
+                }
+            )
+            return results
+
+        is_obb = self.obb is not None
+        data = self.obb if is_obb else self.boxes
+        h, w = self.orig_shape if normalize else (1, 1)
+        for i, row in enumerate(data):  # xyxy, track_id if tracking, conf, class_id
+            class_id, conf = int(row.cls), round(row.conf.item(), decimals)
+            unc = round(row.unc.item(), decimals)
+            box = (row.xyxyxyxy if is_obb else row.xyxy).squeeze().reshape(-1, 2).tolist()
+            xy = {}
+            for j, b in enumerate(box):
+                xy[f"x{j + 1}"] = round(b[0] / w, decimals)
+                xy[f"y{j + 1}"] = round(b[1] / h, decimals)
+            result = {"name": self.names[class_id], "class": class_id, "confidence": conf, "box": xy, "unc": unc}
+            if data.is_track:
+                result["track_id"] = int(row.id.item())  # track ID
+            if self.masks:
+                result["segments"] = {
+                    "x": (self.masks.xy[i][:, 0] / w).round(decimals).tolist(),
+                    "y": (self.masks.xy[i][:, 1] / h).round(decimals).tolist(),
+                }
+            if self.keypoints is not None:
+                x, y, visible = self.keypoints[i].data[0].cpu().unbind(dim=1)  # torch Tensor
+                result["keypoints"] = {
+                    "x": (x / w).numpy().round(decimals).tolist(),  # decimals named argument required
+                    "y": (y / h).numpy().round(decimals).tolist(),
+                    "visible": visible.numpy().round(decimals).tolist(),
+                }
+            results.append(result)
+
+        return results
+
+
+class BoxesUncertainty(Boxes):
+    """
+    A class for managing and manipulating detection boxes, extended with an additional class label uncertainty value per box.
+    """
+
+    def __init__(self, boxes: Union[torch.Tensor, np.ndarray], orig_shape: Tuple[int, int]) -> None:
+        """
+        Initialize the Boxes class with detection box data and the original image shape.
+        """
+        if boxes.ndim == 1:
+            boxes = boxes[None, :]
+        n = boxes.shape[-1]
+        assert n in {7, 8}, f"expected 7 or 8 values but got {n}"  # xyxy, track_id, conf, cls, unc
+        BaseTensor.__init__(self, boxes, orig_shape)
+        self.is_track = n == 7
+        self.orig_shape = orig_shape
+
+    @property
+    def unc(self) -> Union[torch.Tensor, np.ndarray]:
+        """
+        Return the uncertainty scores for each detection box.
+
+        Returns:
+            (torch.Tensor | numpy.ndarray): A 1D tensor or array containing uncertainty scores for each detection,
+                with shape (N,) where N is the number of detections.
+
+        Examples:
+            >>> boxes = Boxes(torch.tensor([[10, 20, 30, 40, 0.9, 0, 0.15]]), orig_shape=(100, 100))
+            >>> unc_scores = boxes.cunc
+            >>> print(unc_scores)
+            tensor([0.1500])
+        """
+        return self.data[:, -1]

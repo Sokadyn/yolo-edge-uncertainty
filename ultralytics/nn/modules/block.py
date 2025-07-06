@@ -52,6 +52,7 @@ __all__ = (
     "PSA",
     "SCDown",
     "TorchVision",
+    "DropBlock2D",
 )
 
 
@@ -2031,3 +2032,91 @@ class SAVPE(nn.Module):
         aggregated = score.transpose(-2, -3) @ x.reshape(B, self.c, C // self.c, -1).transpose(-1, -2)
 
         return F.normalize(aggregated.transpose(-2, -3).reshape(B, Q, -1), dim=-1, p=2)
+
+
+class DropBlock2D(nn.Module):
+    r"""
+    Code References: https://github.com/miguelvr/dropblock/blob/master/dropblock/dropblock.py
+    
+    MIT License
+
+    Copyright (c) 2018 Miguel Varela Ramos
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+    
+    Randomly zeroes 2D spatial blocks of the input tensor.
+
+    As described in the paper
+    `DropBlock: A regularization method for convolutional networks`_ ,
+    dropping whole blocks of feature map allows to remove semantic
+    information as compared to regular dropout.
+
+    Args:
+        drop_prob (float): probability of an element to be dropped.
+        block_size (int): size of the block to drop
+
+    Shape:
+        - Input: `(N, C, H, W)`
+        - Output: `(N, C, H, W)`
+
+    .. _DropBlock: A regularization method for convolutional networks:
+       https://arxiv.org/abs/1810.12890
+
+    """
+
+    def __init__(self, drop_prob=0.0, block_size=3):
+        super(DropBlock2D, self).__init__()
+
+        self.drop_prob = drop_prob
+        self.block_size = block_size
+
+    def forward(self, x):
+        # shape: (bsize, channels, height, width)
+
+        assert x.dim() == 4, \
+            "Expected input with 4 dimensions (bsize, channels, height, width)"
+
+        if not self.training or self.drop_prob == 0.:
+            return x
+        else:
+            gamma = self.drop_prob / (self.block_size ** 2)
+            mask = (torch.rand(x.shape[0], *x.shape[2:]) < gamma).to(x.dtype) # to(x.dtype) fixes "expected float but got half" error
+            mask = mask.to(x.device)
+            block_mask = self._compute_block_mask(mask)
+            out = x * block_mask[:, None, :, :]
+            out = out * (block_mask.numel() / block_mask.sum())
+
+            return out
+
+    def _compute_block_mask(self, mask):
+        block_mask = F.max_pool2d(input=mask[:, None, :, :],
+                                  kernel_size=(self.block_size, self.block_size),
+                                  stride=(1, 1),
+                                  padding=self.block_size // 2)
+
+        if self.block_size % 2 == 0:
+            block_mask = block_mask[:, :, :-1, :-1]
+
+        block_mask = 1 - block_mask.squeeze(1)
+
+        return block_mask
+    
+    def __repr__(self):
+	    return f"DropBlock2D(drop_prob={self.drop_prob}, block_size={self.block_size})"
+    

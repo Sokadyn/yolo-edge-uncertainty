@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 from ultralytics.data.build import load_inference_source
 from ultralytics.engine.model import Model
 from ultralytics.models import yolo
+from ultralytics.models.yolo.detect_uncertainty import DetectionPredictorUncertainty, DetectionTrainerUncertainty, DetectionValidatorUncertainty
 from ultralytics.nn.tasks import (
     ClassificationModel,
     DetectionModel,
@@ -15,7 +16,9 @@ from ultralytics.nn.tasks import (
     WorldModel,
     YOLOEModel,
     YOLOESegModel,
+    DetectionModelUncertainty,
 )
+
 from ultralytics.utils import ROOT, YAML
 
 
@@ -441,3 +444,20 @@ class YOLOE(Model):
             self.predictor = None  # reset predictor
 
         return super().predict(source, stream, **kwargs)
+    
+
+class YOLOEdgeUncertainty(YOLO):
+    """
+    YOLO (You Only Look Once) object detection model with additional low inference time uncertainty estimation.
+    """
+    @property
+    def task_map(self):
+        """Map head to model, trainer, validator, and predictor classes."""
+        return {
+            "detect": {
+                "model": DetectionModelUncertainty,
+                "trainer": DetectionTrainerUncertainty,
+                "validator": DetectionValidatorUncertainty,
+                "predictor": DetectionPredictorUncertainty,
+            },
+        }
