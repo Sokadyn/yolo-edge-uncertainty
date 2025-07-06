@@ -1475,3 +1475,264 @@ class OBBMetrics(DetMetrics):
         DetMetrics.__init__(self, names)
         # TODO: probably remove task as well
         self.task = "obb"
+
+
+class MetricUncertainty(Metric):
+    """
+    Extends Metric class with uncertainty error metrics.
+    """
+
+    def __init__(self):
+        """Initialize a MetricUncertainty instance."""
+        super().__init__()
+        self.all_mue_values_per_iou = [] # (1, 10)
+        self.all_mue_entropy_thresholds_per_iou = [] # (1, 10)
+        self.all_ue_correct_per_iou = [] # (1, 10)
+        self.all_ue_incorrect_per_iou = [] # (1, 10)
+
+    @property
+    def mue50(self) -> float:
+        """
+        Return the Uncertainty Error (UE) at IoU threshold of 0.5.
+
+        Returns:
+            (float): The UE at IoU threshold of 0.5.
+        """
+        return self.all_mue_values_per_iou[0] if len(self.all_mue_values_per_iou) else 0.0
+
+    @property
+    def mue50_threshold(self) -> float:
+        """
+        Return the Uncertainty Error threshold at IoU threshold of 0.5.
+        """
+        return self.all_mue_entropy_thresholds_per_iou[0] if len(self.all_mue_entropy_thresholds_per_iou) else 0.0
+
+    @property
+    def mue75(self) -> float:
+        """
+        Return the Uncertainty Error (UE) at IoU threshold of 0.75.
+
+        Returns:
+            (float): The UE at IoU threshold of 0.75.
+        """
+        return self.all_mue_values_per_iou[5] if len(self.all_mue_values_per_iou) else 0.0
+    
+    @property
+    def mue75_threshold(self) -> float:
+        """
+        Return the Uncertainty Error threshold at IoU threshold of 0.75.
+
+        Returns:
+            (float): The UE threshold at IoU threshold of 0.75.
+        """
+        return self.all_mue_entropy_thresholds_per_iou[5] if len(self.all_mue_entropy_thresholds_per_iou) else 0.0
+    
+    @property
+    def mue(self) -> float:
+        """
+        Return the mean Uncertainty Error (UE) over IoU thresholds of 0.5 - 0.95 in steps of 0.05.
+
+        Returns:
+            (float): The mean UE over IoU thresholds of 0.5 - 0.95 in steps of 0.05.
+        """
+        return np.mean(self.all_mue_values_per_iou) if len(self.all_mue_values_per_iou) else 0.0
+    
+    @property
+    def mue_threshold(self) -> float:
+        """
+        Return the mean Uncertainty Error threshold over IoU thresholds of 0.5 - 0.95 in steps of 0.05.
+
+        Returns:
+            (float): The mean UE threshold over IoU thresholds of 0.5 - 0.95 in steps of 0.05.
+        """
+        return np.mean(self.all_mue_entropy_thresholds_per_iou) if len(self.all_mue_entropy_thresholds_per_iou) else 0.0
+
+    @property
+    def mue50_correct(self) -> float:
+        """
+        Return the UE correct part at IoU threshold of 0.5.
+        """
+        return self.all_ue_correct_per_iou[0] if len(self.all_ue_correct_per_iou) else 0.0
+
+    @property
+    def mue50_incorrect(self) -> float:
+        """
+        Return the UE incorrect part at IoU threshold of 0.5.
+        """
+        return self.all_ue_incorrect_per_iou[0] if len(self.all_ue_incorrect_per_iou) else 0.0
+
+    @property
+    def mue_correct(self) -> float:
+        """
+        Return the mean UE correct part over IoU thresholds.
+        """
+        return np.mean(self.all_ue_correct_per_iou) if len(self.all_ue_correct_per_iou) else 0.0
+
+    @property
+    def mue_incorrect(self) -> float:
+        """
+        Return the mean UE incorrect part over IoU thresholds.
+        """
+        return np.mean(self.all_ue_incorrect_per_iou) if len(self.all_ue_incorrect_per_iou) else 0.0
+
+    def fitness(self):
+        # TODO: Add uncertainty to the fitness calculation
+        return super().fitness()
+    
+    def update_uncertainty(self, ue_results: tuple) -> None:
+        """
+        Update uncertainty error metrics.
+
+        Args:
+            ue_results (tuple): Tuple containing (all_mue, ue_thresholds, ue_correct, ue_incorrect).
+        """
+        self.all_mue_values_per_iou, self.all_mue_entropy_thresholds_per_iou, self.all_ue_correct_per_iou, self.all_ue_incorrect_per_iou = ue_results
+
+
+class DetMetricsUncertainty(DetMetrics):
+    def __init__(self, names: Dict[int, str] = {}):
+        """Initialize DetMetricsUncertainty with both regular and uncertainty metrics."""
+        super().__init__(names)
+        # Use MetricUncertainty for both box and box_unc
+        self.box = MetricUncertainty()  # Use MetricUncertainty for uncertainty-filtered evaluation, in addition to self.box
+        self.stats["unc"] = []
+
+    @property
+    def keys(self) -> List[str]:
+        """Return a list of keys for accessing specific metrics including uncertainty metrics."""
+        return super().keys + [
+            "metrics/mUE50",
+            "metrics/mUE50_thres",
+            "metrics/mUE50-95",
+            "metrics/mUE50-95_thres",
+            "metrics/mUE50_correct",
+            "metrics/mUE50_incorrect",
+            "metrics/mUE50-95_correct",
+            "metrics/mUE50-95_incorrect",
+        ]
+
+    def mean_results(self) -> List[float]:
+        """Calculate mean of detected objects & return precision, recall, mAP50, mAP50-95, and uncertainty metrics."""
+        return super().mean_results() + [
+            self.box.mue50, 
+            self.box.mue50_threshold,
+            self.box.mue,
+            self.box.mue_threshold,
+            self.box.mue50_correct,
+            self.box.mue50_incorrect,
+            self.box.mue_correct,
+            self.box.mue_incorrect,
+        ]
+
+    def process(self, save_dir: Path = Path("."), plot: bool = False, on_plot=None) -> Dict[str, np.ndarray]:
+        """
+        Process predicted results for object detection and update metrics, including uncertainty error.
+        First evaluates regular metrics, then applies uncertainty thresholding and re-evaluates.
+        """
+        stats = super().process(save_dir, plot, on_plot)
+        if len(stats) == 0:
+            return stats
+        
+        mue_results = self.calculate_uncertainty_error(stats)
+        self.box.update_uncertainty(mue_results)
+
+        return stats
+
+    def calculate_uncertainty_error(self, stats: Dict[str, np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Calculate the minimum Uncertainty Error (UE) metric over fixed uncertainty thresholds from 0.1 to 1.0,
+        for each IoU threshold (0.5-0.95), and log both parts of the UE sum (ue_correct and ue_incorrect).
+
+        Returns:
+            Tuple containing:
+                - all_mue (np.ndarray): Uncertainty Error for all IoU thresholds
+                - ue_thresholds (np.ndarray): Uncertainty threshold for each IoU threshold
+                - ue_correct_per_iou (np.ndarray): UE correct part for all IoU thresholds (at min UE)
+                - ue_incorrect_per_iou (np.ndarray): UE incorrect part for all IoU thresholds (at min UE)
+        """
+        tp = stats["tp"]  # shape (N, num_iou_thresholds)
+        unc = stats.get("unc", np.zeros_like(tp[:, 0]))  # shape (N,)
+
+        if tp.size == 0 or unc.size == 0:
+            return np.zeros(10), np.zeros(10), np.zeros(10), np.zeros(10)
+
+        num_iou = tp.shape[1]
+        ue_per_iou = np.zeros(num_iou)
+        ue_threshold_per_iou = np.zeros(num_iou)
+        ue_correct_per_iou = np.zeros(num_iou)
+        ue_incorrect_per_iou = np.zeros(num_iou)
+
+        # Uncertainty thresholds
+        thresholds = np.arange(0.01, 1.01, 0.01)
+
+        for i in range(num_iou):
+            tp_i = tp[:, i]
+            correct_detections = tp_i == 1
+            incorrect_detections = tp_i == 0
+
+            min_ue = float('inf')
+            min_thr = 0.0
+            min_ue_correct = 0.0
+            min_ue_incorrect = 0.0
+
+            total_correct = correct_detections.sum()
+            total_incorrect = incorrect_detections.sum()
+
+            for thr in thresholds:
+                incorrect_rejections = (correct_detections & (unc > thr)).sum()
+                incorrect_acceptances = (incorrect_detections & (unc <= thr)).sum()
+
+                ue_correct = 0.5 * incorrect_rejections / total_correct if total_correct > 0 else 0
+                ue_incorrect = 0.5 * incorrect_acceptances / total_incorrect if total_incorrect > 0 else 0
+                ue = ue_correct + ue_incorrect
+
+                if ue < min_ue:
+                    min_ue = ue
+                    min_thr = thr
+                    min_ue_correct = ue_correct
+                    min_ue_incorrect = ue_incorrect
+
+            ue_per_iou[i] = float(min_ue)
+            ue_threshold_per_iou[i] = float(min_thr)
+            ue_correct_per_iou[i] = float(min_ue_correct)
+            ue_incorrect_per_iou[i] = float(min_ue_incorrect)
+
+        # Store per-IoU-threshold results
+        self.ue_per_iou = ue_per_iou
+        self.ue_threshold_per_iou = ue_threshold_per_iou
+        self.ue_correct_per_iou = ue_correct_per_iou
+        self.ue_incorrect_per_iou = ue_incorrect_per_iou
+        self.ue = float(np.mean(ue_per_iou))
+        self.ue_threshold = float(np.mean(ue_threshold_per_iou))
+        return ue_per_iou, ue_threshold_per_iou, ue_correct_per_iou, ue_incorrect_per_iou
+
+    @property
+    def results_dict(self) -> Dict[str, float]:
+        """Return dictionary of computed performance metrics and statistics."""
+        results = super().results_dict
+        results.update({
+            "metrics/mUE50": self.box.mue50,
+            "metrics/mUE50_thres": self.box.mue50_threshold,
+            "metrics/mUE50-95": self.box.mue,
+            "metrics/mUE50-95_thres": self.box.mue_threshold,
+            "metrics/mUE50_correct": self.box.mue50_correct,
+            "metrics/mUE50_incorrect": self.box.mue50_incorrect,
+            "metrics/mUE50-95_correct": self.box.mue_correct,
+            "metrics/mUE50-95_incorrect": self.box.mue_incorrect,
+        })
+        return results
+
+    def clear_stats(self):
+        """Clear the stored statistics."""
+        for v in self.stats.values():
+            v.clear()
+
+    def update_stats_uncertainty(self, stat: Dict[str, Any]) -> None:
+        """
+        Update only the uncertainty-related statistics by appending new values to 'tp_after_unc' and 'unc'.
+
+        Args:
+            stat (Dict[str, any]): Dictionary containing new statistical values to append.
+        """
+        self.stats["tp_after_unc"].append(stat["tp_after_unc"])
+        self.stats["unc"].append(stat["unc"])

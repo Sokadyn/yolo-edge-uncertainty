@@ -68,6 +68,11 @@ from ultralytics.nn.modules import (
     YOLOEDetect,
     YOLOESegment,
     v10Detect,
+    DetectBaseConfidence,
+    DetectBaseUncertainty,
+    DetectEnsemble,
+    DetectMCDropout,
+    DetectEDLMEH,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -78,6 +83,7 @@ from ultralytics.utils.loss import (
     v8OBBLoss,
     v8PoseLoss,
     v8SegmentationLoss,
+    v8DetectionLossEDLMEH
 )
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
@@ -1713,7 +1719,7 @@ def parse_model(d, ch, verbose=True):
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
         elif m in frozenset(
-            {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect}
+            {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect, DetectBaseConfidence, DetectBaseUncertainty, DetectEnsemble, DetectMCDropout, DetectEDLMEH}
         ):
             args.append([ch[x] for x in f])
             if m is Segment or m is YOLOESegment:
@@ -1835,7 +1841,7 @@ def guess_model_task(model):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect, YOLOEDetect, v10Detect)):
+            elif isinstance(m, (Detect, WorldDetect, YOLOEDetect, v10Detect, DetectBaseConfidence, DetectBaseUncertainty, DetectEnsemble, DetectMCDropout, DetectEDLMEH)):
                 return "detect"
 
     # Guess from model filename
@@ -1858,3 +1864,15 @@ def guess_model_task(model):
         "Explicitly define task for your model, i.e. 'task=detect', 'segment', 'classify','pose' or 'obb'."
     )
     return "detect"  # assume detect
+
+
+class DetectionModelUncertainty(DetectionModel):
+    """
+    YOLO detection model for uncertainty estimation.
+    """
+
+    def init_criterion(self):
+        """Initialize the loss criterion for the DetectionModel."""
+        if isinstance(self.model[-1], DetectEDLMEH):
+            return v8DetectionLossEDLMEH(self) 
+        return E2EDetectLoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)

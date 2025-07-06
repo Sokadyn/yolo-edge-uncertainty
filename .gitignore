@@ -174,3 +174,8 @@ pnnx*
 
 # calibration image
 calibration_*.npy
+
+.dev/
+dataset_gens/cityscapes-to-coco-conversion-master
+interim_results/
+interim_results_val_only/
