@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 
 from ultralytics.data import build_dataloader, build_yolo_dataset, converter
 from ultralytics.utils import LOGGER, ops
@@ -32,6 +33,8 @@ class DetectionValidatorUncertainty(DetectionValidator):
         """
         super().__init__(dataloader, save_dir, args, _callbacks)
         self.metrics = DetMetricsUncertainty()
+        self.uncertainty_bins = np.zeros(100)
+        self.bin_edges = np.linspace(0, 5, 101)
 
     def preprocess(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -76,9 +79,9 @@ class DetectionValidatorUncertainty(DetectionValidator):
 
     def get_desc(self) -> str:
         """Return a formatted string summarizing class metrics of YOLO model."""
-        return ("%22s" + "%11s" * 14) % (
+        return ("%22s" + "%11s" * 16) % (
             "Class", "Images", "Instances", "Box(P", "R", "mAP50", "mAP50-95", "mUE50", "mUE50_t", "mUE50-95", "mUE50-95_t",
-            "mUE50_c", "mUE50_i", "mUE50-95_c", "mUE50-95_i"
+            "mUE50_c", "mUE50_i", "mUE50-95_c", "mUE50-95_i", "max_mAP50_unc", "max_mAP50-95_unc"
         )
 
     def postprocess(self, preds: torch.Tensor) -> List[Dict[str, torch.Tensor]]:
@@ -103,7 +106,39 @@ class DetectionValidatorUncertainty(DetectionValidator):
             end2end=self.end2end,
             rotated=self.args.task == "obb",
         )
-        return [{"bboxes": x[:, :4], "conf": x[:, 4], "cls": x[:, 5], "unc": x[:, 6]} for x in outputs] # uncertainty (unc) in "extra" field after nms
+        
+        results = [{"bboxes": x[:, :4], "conf": x[:, 4], "cls": x[:, 5], "unc": x[:, 6]} for x in outputs]
+
+        for x in results:
+            if x["unc"].numel() > 0:
+                unc_values = x["unc"].cpu().numpy()
+                bin_indices = np.digitize(unc_values, self.bin_edges[:-1])
+                valid_indices = (bin_indices > 0) & (bin_indices <= len(self.uncertainty_bins))
+                np.add.at(self.uncertainty_bins, bin_indices[valid_indices] - 1, 1)
+
+        return results
+
+    def plot_final_histogram(self):
+        """Plot and save the histogram of accumulated uncertainty values."""
+        plt.figure()
+
+        bin_width = self.bin_edges[1] - self.bin_edges[0]
+        plt.bar(self.bin_edges[:-1], self.uncertainty_bins, width=bin_width, color='blue', alpha=0.7, align='edge')
+
+        head_name = self.args.model.replace('.pt', '').replace('.yaml', '') if hasattr(self.args, 'model') else 'UnknownHead'
+        plt.title('Final Histogram of Uncertainty Values')
+        plt.xlabel('Uncertainty Bins')
+        plt.ylabel('Frequency')
+        plt.xlim(self.bin_edges[0], self.bin_edges[-1])
+        plt.grid(True)
+        plt.tight_layout()
+
+        print("Head Name:", head_name)
+        print("Save Directory:", self.save_dir)
+        print(f"Saving uncertainty histogram to {self.save_dir / 'final_uncertainty_histogram.png'}")
+
+        plt.savefig(str(self.save_dir / "uncertainty_histogram.png"))
+        plt.close()
 
 
     def _prepare_pred(self, pred: Dict[str, torch.Tensor], pbatch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
@@ -176,6 +211,7 @@ class DetectionValidatorUncertainty(DetectionValidator):
         if self.args.plots:
             for normalize in True, False:
                 self.confusion_matrix.plot(save_dir=self.save_dir, normalize=normalize, on_plot=self.on_plot)
+                self.plot_final_histogram()
         self.metrics.speed = self.speed
         self.metrics.confusion_matrix = self.confusion_matrix
 

@@ -896,12 +896,10 @@ def calculate_sigmoid_entropy(cls_probs):
         cls_probs (torch.Tensor): Class probabilities with shape (batch_size, num_classes, num_anchors).
 
     Returns:
-        torch.Tensor: Entropy values normalized within [0, 1] with shape (batch_size, 1, num_anchors).
+        torch.Tensor: Entropy values with shape (batch_size, 1, num_anchors).
     """
-    # entropy of a mulitlabel sigmoid vector, normalized to [0, 1] by dividing by the number of classes
-    n_classes = cls_probs.shape[1]
     entropy = -torch.sum((cls_probs * torch.log2(cls_probs + 1e-8) +
-                          (1 - cls_probs) * torch.log2(1 - cls_probs + 1e-8)), dim=1, keepdim=True) #/ n_classes
+                          (1 - cls_probs) * torch.log2(1 - cls_probs + 1e-8)), dim=1, keepdim=True)
     return entropy
 
 def calculate_softmax_entropy(cls_probs):
@@ -912,12 +910,9 @@ def calculate_softmax_entropy(cls_probs):
         cls_probs (torch.Tensor): Class probabilities with shape (batch_size, num_classes, num_anchors).
 
     Returns:
-        torch.Tensor: Entropy values normalized within [0, 1] with shape (batch_size, 1, num_anchors).
+        torch.Tensor: Entropy values with shape (batch_size, 1, num_anchors).
     """
-    # entropy of a softmax vector, normalized to [0, 1] by dividing by the number of classes
-    n_classes = cls_probs.shape[1]
-    max_entropy = math.log2(n_classes) # normalization factor
-    entropy = -torch.sum(cls_probs * torch.log2(cls_probs + 1e-8), dim=1, keepdim=True) / max_entropy
+    entropy = -torch.sum(cls_probs * torch.log2(cls_probs + 1e-8), dim=1, keepdim=True)# / max_entropy
     return entropy
 
 
@@ -931,12 +926,12 @@ def calculate_classification_multi_sample_entropy(cls_samples):
     Returns:
         torch.Tensor: Entropy values with shape (batch, 1, num_detectors).
     """
-    # cls_samples: (num_samples, batch, num_detectors, num_classes)
+    n_classes = cls_samples.shape[-1]
     avg = cls_samples.mean(dim=0)
-    total_uncertainty = (-avg * (avg + 1e-8).log()).sum(dim=-1).unsqueeze(-1)
-    entropy = (-cls_samples * (cls_samples + 1e-8).log()).sum(dim=-1)
+    total_uncertainty = (-avg * (avg + 1e-8).log2()).sum(dim=-1).unsqueeze(-1)
+    entropy = (-cls_samples * (cls_samples + 1e-8).log2()).sum(dim=-1)
     aleatoric_uncertainty = entropy.mean(dim=0).unsqueeze(-1)
-    epistemic_uncertainty = total_uncertainty - aleatoric_uncertainty
+    epistemic_uncertainty = (total_uncertainty - aleatoric_uncertainty)
     epistemic_uncertainty = epistemic_uncertainty
 
-    return epistemic_uncertainty
+    return total_uncertainty # epistemic_uncertainty

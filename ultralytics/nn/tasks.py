@@ -73,6 +73,7 @@ from ultralytics.nn.modules import (
     DetectEnsemble,
     DetectMCDropout,
     DetectEDLMEH,
+    DetectDFLUncertainty,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1719,7 +1720,7 @@ def parse_model(d, ch, verbose=True):
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
         elif m in frozenset(
-            {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect, DetectBaseConfidence, DetectBaseUncertainty, DetectEnsemble, DetectMCDropout, DetectEDLMEH}
+            {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect, DetectBaseConfidence, DetectBaseUncertainty, DetectEnsemble, DetectMCDropout, DetectEDLMEH, DetectDFLUncertainty}
         ):
             args.append([ch[x] for x in f])
             if m is Segment or m is YOLOESegment:
@@ -1841,7 +1842,7 @@ def guess_model_task(model):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect, YOLOEDetect, v10Detect, DetectBaseConfidence, DetectBaseUncertainty, DetectEnsemble, DetectMCDropout, DetectEDLMEH)):
+            elif isinstance(m, (Detect, WorldDetect, YOLOEDetect, v10Detect, DetectBaseConfidence, DetectBaseUncertainty, DetectEnsemble, DetectMCDropout, DetectEDLMEH, DetectDFLUncertainty)):
                 return "detect"
 
     # Guess from model filename
