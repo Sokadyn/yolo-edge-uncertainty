@@ -31,6 +31,11 @@ Work is currently in progress, and the framework is an experimental state, not r
 - **Overhead**: Low - single forward pass, just one more output value per detection
 - **Configuration**: `yolo11n-edl-meh.yaml`
 
+### 6. **DFL Uncertainty**
+- **Method**: Uses Distribution Focal Loss (DFL) naturally present in YOLO11 to provide uncertainty estimates through bounding box coordinates.
+- **Overhead**: Low - uses existing DFL outputs, only entropy calculation
+- **Configuration**: `yolo11n-dfl-uncertainty.yaml`
+
 ## Experiments
 To run experiments:
 - Prepare the datasets (cityscapes and foggy-cityscapes) with scripts in `dataset_gens` (0-2)

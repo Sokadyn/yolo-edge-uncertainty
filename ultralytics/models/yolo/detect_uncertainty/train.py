@@ -46,8 +46,8 @@ class DetectionTrainerUncertainty(DetectionTrainer):
         )
 
     def progress_string(self):
-        """Return a formatted string of training progress with epoch, GPU memory, loss, instances, size, and mue metrics."""
-        return ("\n" + "%11s" * 9) % (
+        """Return a formatted string of training progress with epoch, GPU memory, loss, instances, size, and uncertainty metrics."""
+        return ("\n" + "%11s" * 11) % (
             "Epoch",
             "GPU_mem",
             *self.loss_names,
@@ -55,5 +55,7 @@ class DetectionTrainerUncertainty(DetectionTrainer):
             "Size",
             "mUE50",
             "mUE50-95",
+            "max_mAP50_unc",
+            "max_mAP50-95_unc",
         )
 

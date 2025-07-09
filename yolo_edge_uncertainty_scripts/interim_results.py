@@ -27,7 +27,8 @@ models = {
     "base-uncertainty": YOLOEdgeUncertainty('yolo11n-base-uncertainty.yaml'),
     "ensemble": YOLOEdgeUncertainty('yolo11n-ensemble.yaml'),
     "mc-dropout": YOLOEdgeUncertainty('yolo11n-mc-dropout.yaml'),
-    "edl-meh": YOLOEdgeUncertainty('yolo11n-edl-meh.yaml')
+    "edl-meh": YOLOEdgeUncertainty('yolo11n-edl-meh.yaml'),
+    "dfl-uncertainty": YOLOEdgeUncertainty('yolo11n-dfl-uncertainty.yaml'),
 }
 
 date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
