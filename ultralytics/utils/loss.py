@@ -848,8 +848,8 @@ class TVPSegmentLoss(TVPDetectLoss):
         vp_loss = self.vp_criterion((vp_feats, pred_masks, proto), batch)
         cls_loss = vp_loss[0][2]
         return cls_loss, vp_loss[1]
-
-
+    
+    
 class v8DetectionLossEDLMEH:
     """Criterion class for computing training losses."""
 
@@ -899,23 +899,6 @@ class v8DetectionLossEDLMEH:
             pred_dist = pred_dist.view(b, a, 4, c // 4).softmax(3).matmul(self.proj.type(pred_dist.dtype))
         return dist2bbox(pred_dist, anchor_points, xywh=False)
 
-    
-    def edl_meh_loss(self, cls_loss_per_box, meh_lambda):
-        """
-        Compute the MEH Loss as:
-            L_MEH = Σ Σ (ls,i - 1/λs,i)^2
-        where:
-            - cls_loss (ls,i) is the classification loss for bounding box i.
-            - meh_lambda (λs,i) is the evidence from the MEH head.
-        """
-        # Ensure meh_lambda is positive to avoid division errors
-        meh_lambda = meh_lambda.clamp(min=1e-3)
-
-        # Compute MEH loss: (ls,i - 1 / λs,i)^2
-        loss_meh = 0.1 * (cls_loss_per_box - 1 / meh_lambda).abs() ** 2
-
-        return loss_meh
-
 
     def __call__(self, preds, batch):
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
@@ -952,35 +935,22 @@ class v8DetectionLossEDLMEH:
             mask_gt,
         )
 
+        # target_scores...(B, detectors, classes)
         target_scores_sum = max(target_scores.sum(), 1)
 
         cls_loss = self.bce(pred_scores, target_scores.to(dtype))
-        cls_loss_per_box = cls_loss.sum(axis=-1, keepdims=True)
-        meh_loss = self.edl_meh_loss(cls_loss_per_box, meh_lambda)
-        meh_loss *= target_scores.sum(-1, keepdim=True)
+        cls_loss_per_box = cls_loss.sum(axis=-1, keepdim=True)
+        edl_weight = getattr(self.hyp, 'edl_weight', 1.0)
+        # Compute MEH loss: (ls,i - 1 / λs,i)^2
+        meh_loss = edl_weight * (cls_loss_per_box.detach() - 1 / meh_lambda) ** 2
+        meh_loss *= target_scores.sum(-1, keepdim=True) # target_scores_sum is 0 for detectors seeing background
 
-        alpha_edl= meh_lambda * pred_scores.softmax(dim=-1)
-        y = target_scores
-        alpha_edl_tilde = y + (1 - y) * alpha_edl
-        alpha_edl_tilde_sum = alpha_edl_tilde.sum(dim=-1, keepdim=True)  # Sum over class dimension: ∑ α_ik
-        K = alpha_edl_tilde.shape[-1]  # Number of classes
-        K = torch.tensor(K, dtype=alpha_edl_tilde_sum.dtype, device=alpha_edl_tilde_sum.device).expand_as(alpha_edl_tilde_sum)  # Number of classes
+        # If classification head is frozen (cv3), use MEH loss only
+        if "23.cv3" in getattr(self.hyp, 'freeze', []):
+            loss[1] = meh_loss.sum() / target_scores_sum
+        else:
+            loss[1] = (cls_loss_per_box.sum() + meh_loss.sum()) / target_scores_sum
 
-        s1 = torch.lgamma(alpha_edl_tilde_sum)
-        s2 = torch.lgamma(K.to(dtype=alpha_edl_tilde.dtype, device=alpha_edl_tilde.device))
-        s3 = torch.sum(torch.lgamma(alpha_edl_tilde), dim=-1, keepdim=True)
-        s4 = torch.sum(torch.lgamma(torch.ones_like(alpha_edl_tilde)), dim=-1, keepdim=True)
-        s5 = torch.sum((alpha_edl_tilde - 1) * (torch.digamma(alpha_edl_tilde) - torch.digamma(alpha_edl_tilde_sum)), dim=-1, keepdim=True)
-
-        ones = torch.sum(torch.lgamma(torch.ones_like(alpha_edl_tilde)), dim=-1)
-        # Compute the KL divergence
-
-        # TODO check inclusion of KL Divergence in the loss, currently too high values
-        kl_div = 0.0001 * (
-            s1 - s2  # log(Γ(∑ α_ik) / Γ(K))
-            - s3 + s4  # ∑ log(Γ(1)) - ∑ log(Γ(α_ik))
-            + s5  # ∑ (α_ik - 1) [ ψ(α_ik) - ψ(∑ α_ij) ]
-        )
         loss[1] = (cls_loss_per_box + meh_loss).sum() / target_scores_sum  # BCE + MEH Loss
 
         # Bbox loss
@@ -995,4 +965,4 @@ class v8DetectionLossEDLMEH:
         loss[2] *= self.hyp.dfl  # dfl gain
 
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
-
+    

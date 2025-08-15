@@ -950,6 +950,17 @@ def entrypoint(debug: str = "") -> None:
         from ultralytics import SAM
 
         model = SAM(model)
+    # TODO: unify ucertainty model names
+    elif (
+        "base-confidence" in stem
+        or "base-uncertainty" in stem
+        or "ensemble" in stem
+        or "mc-dropout" in stem
+        or "edl-meh" in stem
+        or "dfl-uncertainty" in stem
+    ):
+        from ultralytics import YOLOEdgeUncertainty
+        model = YOLOEdgeUncertainty(model)
     else:
         from ultralytics import YOLO
 

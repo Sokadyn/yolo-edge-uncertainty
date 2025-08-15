@@ -5,10 +5,10 @@ test:
 
 names:
   0: person
-  1: car
-  2: bicycle
-  3: rider
-  4: motorcycle
+  1: rider
+  2: car
+  3: motorcycle
+  4: bicycle
   5: bus
   6: truck
   7: train

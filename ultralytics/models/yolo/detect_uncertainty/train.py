@@ -15,6 +15,7 @@ from ultralytics.utils.plotting import plot_images, plot_labels, plot_results
 from ultralytics.utils.torch_utils import de_parallel, torch_distributed_zero_first
 from ultralytics.models.yolo.detect import DetectionTrainer
 from .val import DetectionValidatorUncertainty
+from ultralytics.nn.modules.head import initialize_uncertainty_layers
 
 class DetectionTrainerUncertainty(DetectionTrainer):
     """
@@ -34,6 +35,7 @@ class DetectionTrainerUncertainty(DetectionTrainer):
             (DetectionModel): YOLO detection model.
         """
         model = DetectionModelUncertainty(cfg, nc=self.data["nc"], ch=self.data["channels"], verbose=verbose and RANK == -1)
+        initialize_uncertainty_layers(model, self.args)
         if weights:
             model.load(weights)
         return model
@@ -47,15 +49,13 @@ class DetectionTrainerUncertainty(DetectionTrainer):
 
     def progress_string(self):
         """Return a formatted string of training progress with epoch, GPU memory, loss, instances, size, and uncertainty metrics."""
-        return ("\n" + "%11s" * 11) % (
+        return ("\n" + "%11s" * 9) % (
             "Epoch",
             "GPU_mem",
             *self.loss_names,
             "Instances",
             "Size",
             "mUE50",
-            "mUE50-95",
-            "max_mAP50_unc",
-            "max_mAP50-95_unc",
+            "mUE50-95"
         )
 

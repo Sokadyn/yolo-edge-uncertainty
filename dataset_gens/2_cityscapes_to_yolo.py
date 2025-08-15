@@ -1,3 +1,20 @@
+"""
+Convert Cityscapes dataset annotations to YOLO format (keep original label ordering (0-7)).
+
+Usage:
+    python3 2_cityscapes_to_yolo.py
+
+Requirements:
+    - Cityscapes dataset should be located at '../datasets/cityscapes'
+    - Foggy Cityscapes dataset should be located at '../datasets/foggy_cityscapes'
+    - Rainy Cityscapes dataset should be located at '../datasets/rainy_cityscapes'
+
+Output:
+    - Citiyscapes to YOLO format in '../datasets/cityscapes'.
+    (Similar structure for foggy and rainy datasets)
+"""
+
+
 import os
 import json
 import shutil
@@ -31,7 +48,6 @@ train_json = os.path.join(coco_annotations_dir, "instancesonly_filtered_gtFine_t
 val_json = os.path.join(coco_annotations_dir, "instancesonly_filtered_gtFine_val.json")
 
 def load_coco_json(json_path):
-    """Loads a COCO JSON file."""
     with open(json_path, "r") as file:
         data = json.load(file)
     return data
@@ -39,7 +55,7 @@ def load_coco_json(json_path):
 train_data = load_coco_json(train_json)
 val_data = load_coco_json(val_json)
 
-class_mapping = {int(cat["id"]) - 1: cat["name"] for cat in train_data["categories"]} # COCO to YOLO class mapping
+class_mapping = {int(cat["id"]) - 1: cat["name"] for cat in train_data["categories"]} # COCO to YOLO class mapping, -1 to start from 0
 
 yaml_path = os.path.join(yolo_root, "labels/classes.yaml")
 with open(yaml_path, "w") as f:
@@ -145,6 +161,6 @@ for image_dir_src in [os.path.join(foggy_cityscapes_dir, "leftImg8bit_foggyDBF")
                     if not os.path.exists(label_path_dest):
                         shutil.copy(label_path_src, label_path_dest)
                 else:
-                    print(f"❌ Skipping label copy for {img_filename} (no label found)")
+                    print(f"Skipping label copy for {img_filename} (no label found)")
 
     shutil.copy(yaml_path, os.path.join(yolo_root.replace("cityscapes", dataset_name), "labels/classes.yaml"))

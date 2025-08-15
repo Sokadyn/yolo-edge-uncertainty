@@ -1,0 +1,16 @@
+# KITTI dataset configuration for YOLO, mapped to the Cityscapes dataset labels
+path: ../datasets/kitti_from_cityscapes  # dataset root dir. Adjust this to your actual path
+train: images/train        # train images (relative to 'path')
+val: images/val            # val images (relative to 'path') TODO:fix val split
+test:                      # test images (optional, fill in if available)
+
+names:
+  0: person
+  1: rider
+  2: car
+  3: motorcycle
+  4: bicycle
+  5: bus
+  6: truck
+  7: train
+

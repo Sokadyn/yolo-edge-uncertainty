@@ -888,50 +888,66 @@ def empty_like(x):
     )
 
 
-def calculate_sigmoid_entropy(cls_probs):
+def calc_cls_sigmoid_single_sample_uncertainty(cls_probs):
     """
     Calculate the entropy of the class probability distributions for a sigmoid vector.
 
     Args:
-        cls_probs (torch.Tensor): Class probabilities with shape (batch_size, num_classes, num_anchors).
+        cls_probs (torch.Tensor): Class probabilities with shape (batch_size, num_classes, num_detectors).
 
     Returns:
-        torch.Tensor: Entropy values with shape (batch_size, 1, num_anchors).
+        torch.Tensor: Entropy values with shape (batch_size, 1, num_detectors).
     """
-    entropy = -torch.sum((cls_probs * torch.log2(cls_probs + 1e-8) +
-                          (1 - cls_probs) * torch.log2(1 - cls_probs + 1e-8)), dim=1, keepdim=True)
+    entropy = -torch.sum((cls_probs * torch.log2(cls_probs + 1e-6) +
+                          (1 - cls_probs) * torch.log2(1 - cls_probs + 1e-6)), dim=1, keepdim=True)
     return entropy
 
-def calculate_softmax_entropy(cls_probs):
+
+def calc_cls_softmax_single_sample_uncertainty(cls_probs):
     """
     Calculate the entropy of the class probability distributions for a softmax vector.
 
     Args:
-        cls_probs (torch.Tensor): Class probabilities with shape (batch_size, num_classes, num_anchors).
+        cls_probs (torch.Tensor): Class probabilities with shape (batch_size, num_classes, num_detectors).
 
     Returns:
-        torch.Tensor: Entropy values with shape (batch_size, 1, num_anchors).
+        torch.Tensor: Entropy values with shape (batch_size, 1, num_detectors).
     """
-    entropy = -torch.sum(cls_probs * torch.log2(cls_probs + 1e-8), dim=1, keepdim=True)# / max_entropy
+    entropy = -torch.sum(cls_probs * torch.log2(cls_probs + 1e-6), dim=1, keepdim=True)# / max_entropy
     return entropy
 
 
-def calculate_classification_multi_sample_entropy(cls_samples):
+def calc_cls_sigmoid_multi_sample_uncertainty(cls_samples):
     """
     Calculate the entropy of the class probability distributions for a multi-sample vector.
 
     Args:
-        cls_samples (torch.Tensor): Class probabilities with shape (num_samples, batch, num_detectors, num_classes).
+        cls_samples (torch.Tensor): Class probabilities (sigmoid) with shape (num_samples, batch, num_detectors, num_classes).
 
     Returns:
         torch.Tensor: Entropy values with shape (batch, 1, num_detectors).
     """
-    n_classes = cls_samples.shape[-1]
     avg = cls_samples.mean(dim=0)
-    total_uncertainty = (-avg * (avg + 1e-8).log2()).sum(dim=-1).unsqueeze(-1)
-    entropy = (-cls_samples * (cls_samples + 1e-8).log2()).sum(dim=-1)
+    total_uncertainty = (-avg * (avg + 1e-6).log2() - (1 - avg) * (1 - avg + 1e-6).log2()).sum(dim=-1).unsqueeze(-1)
+    entropy = (-cls_samples * (cls_samples + 1e-6).log2() - (1 - cls_samples) * (1 - cls_samples + 1e-6).log2()).sum(dim=-1)
+    aleatoric_uncertainty = entropy.mean(dim=0).unsqueeze(-1)
+    epistemic_uncertainty = total_uncertainty - aleatoric_uncertainty
+    return total_uncertainty # epistemic_uncertainty
+
+
+def calc_cls_softmax_multi_sample_uncertainty(cls_samples):
+    """
+    Calculate the entropy of the class probability distributions for a multi-sample vector.
+
+    Args:
+        cls_samples (torch.Tensor): Class probabilities (softmax) with shape (num_samples, batch, num_detectors, num_classes).
+
+    Returns:
+        torch.Tensor: Entropy values with shape (batch, 1, num_detectors).
+    """
+    avg = cls_samples.mean(dim=0)
+    total_uncertainty = (-avg * (avg + 1e-6).log2()).sum(dim=-1).unsqueeze(-1)
+    entropy = (-cls_samples * (cls_samples + 1e-6).log2()).sum(dim=-1)
     aleatoric_uncertainty = entropy.mean(dim=0).unsqueeze(-1)
     epistemic_uncertainty = (total_uncertainty - aleatoric_uncertainty)
-    epistemic_uncertainty = epistemic_uncertainty
-
     return total_uncertainty # epistemic_uncertainty

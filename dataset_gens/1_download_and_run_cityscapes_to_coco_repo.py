@@ -1,3 +1,21 @@
+#!/usr/bin/env python3
+"""
+Extracting CoCo-style labels from original Cityscapes labels using code from a public GitHub repository.
+
+Usage:
+    python3 1_download_and_run_cityscapes_to_coco_repo.py
+
+Requirements:
+    - The Cityscapes dataset path:
+      `../datasets/cityscapes`
+Output:
+    - The script will generate output annotations in the following directory:
+      `../datasets/cityscapes/annotations`
+
+References:
+    https://github.com/TillBeemelmanns/cityscapes-to-coco-conversion
+"""
+
 import argparse
 import os
 import requests
