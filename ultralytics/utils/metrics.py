@@ -1489,6 +1489,10 @@ class MetricUncertainty(Metric):
         self.all_mue_entropy_thresholds_per_iou = [] # (1, 10)
         self.all_ue_correct_per_iou = [] # (1, 10)
         self.all_ue_incorrect_per_iou = [] # (1, 10)
+        self._max_map50_unc = None
+        self._max_map50_unc_threshold = None
+        self._max_map50_95_unc = None
+        self._max_map50_95_unc_threshold = None
 
     @property
     def mue50(self) -> float:
@@ -1600,6 +1604,50 @@ class MetricUncertainty(Metric):
             ue_results (tuple): Tuple containing (all_mue, ue_thresholds, ue_correct, ue_incorrect).
         """
         self.all_mue_values_per_iou, self.all_mue_entropy_thresholds_per_iou, self.all_ue_correct_per_iou, self.all_ue_incorrect_per_iou = ue_results
+
+    @property
+    def max_map50_unc(self) -> float:
+        """
+        Return the maximum mAP@0.5 over all uncertainty thresholds.
+        """
+        return self._max_map50_unc if self._max_map50_unc is not None else 0.0
+
+    @max_map50_unc.setter
+    def max_map50_unc(self, value: float):
+        self._max_map50_unc = value
+
+    @property
+    def max_map50_unc_threshold(self) -> float:
+        """
+        Return the uncertainty threshold at which maximum mAP@0.5 occurs.
+        """
+        return self._max_map50_unc_threshold if self._max_map50_unc_threshold is not None else 0.0
+
+    @max_map50_unc_threshold.setter
+    def max_map50_unc_threshold(self, value: float):
+        self._max_map50_unc_threshold = value
+
+    @property
+    def max_map50_95_unc(self) -> float:
+        """
+        Return the maximum mAP@0.5-0.95 over all uncertainty thresholds.
+        """
+        return self._max_map50_95_unc if self._max_map50_95_unc is not None else 0.0
+
+    @max_map50_95_unc.setter
+    def max_map50_95_unc(self, value: float):
+        self._max_map50_95_unc = value
+
+    @property
+    def max_map50_95_unc_threshold(self) -> float:
+        """
+        Return the uncertainty threshold at which maximum mAP@0.5-0.95 occurs.
+        """
+        return self._max_map50_95_unc_threshold if self._max_map50_95_unc_threshold is not None else 0.0
+
+    @max_map50_95_unc_threshold.setter
+    def max_map50_95_unc_threshold(self, value: float):
+        self._max_map50_95_unc_threshold = value
 
 
 class DetMetricsUncertainty(DetMetrics):
