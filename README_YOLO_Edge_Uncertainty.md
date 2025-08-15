@@ -17,12 +17,12 @@ Work is currently in progress, and the framework is an experimental state, not r
 - **Configuration**: `yolo11n-base-uncertainty.yaml`
 
 ### 3. **Ensemble**
-- **Method**: Multiple model predictions for retrieving epistemic uncertainty
+- **Method**: Multiple model predictions for retrieving uncertainty
 - **Overhead**: Medium - requires multiple samples, uses mutliple detection heads
 - **Configuration**: `yolo11n-ensemble.yaml`
 
 ### 4. **MC Dropout**
-- **Method**: Monte Carlo sampling with dropout during inference to estimate epistemic uncertainty
+- **Method**: Monte Carlo sampling with dropout during inference to estimate uncertainty
 - **Overhead**: Medium - multiple forward passes with dropout, only in the detection head
 - **Configuration**: `yolo11n-mc-dropout.yaml`
 
@@ -38,7 +38,7 @@ Work is currently in progress, and the framework is an experimental state, not r
 
 ## Experiments
 To run experiments:
-- Prepare the datasets (cityscapes and foggy-cityscapes) with scripts in `dataset_gens` (0-2)
+- Prepare the datasets (cityscapes and foggy-cityscapes) with scripts in `dataset_gens` (0-3)
 - Run `yolo_edge_uncertainty_scripts/interim_results.py`
 - Check results with `yolo_edge_uncertainty_scripts/interim_results_analysis.ipynb`
 
@@ -56,4 +56,4 @@ This project is licensed under the AGPL-3.0 License - see the LICENSE file for d
 
 ---
 
-**Note**: This framework is designed for research and production use. Always validate uncertainty estimates in your specific application domain. 
+**Note**: This framework is designed for research. Always validate uncertainty estimates in your specific application domain. 

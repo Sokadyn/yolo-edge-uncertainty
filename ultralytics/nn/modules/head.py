@@ -18,7 +18,8 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 from torch.distributions import Dirichlet
-from ultralytics.utils.ops import calculate_sigmoid_entropy, calculate_softmax_entropy, calculate_classification_multi_sample_entropy
+from ultralytics.utils.ops import calc_cls_sigmoid_single_sample_uncertainty, calc_cls_softmax_single_sample_uncertainty, calc_cls_sigmoid_multi_sample_uncertainty, calc_cls_softmax_multi_sample_uncertainty
+from ultralytics.nn.modules.activation import AGLU
 
 __all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOEDetect", "YOLOESegment", "DetectBaseConfidence", "DetectBaseUncertainty", "DetectEnsemble", "DetectMCDropout", "DetectEDLMEH", "DetectDFLUncertainty"
 
@@ -1268,6 +1269,13 @@ class DetectBaseConfidence(Detect):
         y = torch.cat((y, uncertainty.unsqueeze(1)), dim=1)
 
         return y, x
+    
+    def forward_end2end(self, x):
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
+    
+    @staticmethod
+    def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
 
 
 class DetectBaseUncertainty(Detect):
@@ -1304,131 +1312,138 @@ class DetectBaseUncertainty(Detect):
 
         cls_probs = y[: , 4:, :]
         # TODO: check weather to calculate entropy using sigmoid or softmax as base distirbution
-        # entropy = calculate_sigmoid_entropy(cls_probs)
-        entropy = calculate_softmax_entropy(cls_probs.softmax(dim=1))
+        entropy = calc_cls_softmax_single_sample_uncertainty(cls_probs.softmax(dim=1))
         y = torch.cat((y, entropy), dim=1)
 
         return y, x
     
+    def forward_end2end(self, x):
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
+
+    @staticmethod
+    def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
+    
 
 class DetectEnsemble(Detect):
     """
-    YOLO Detect ensemble head that uses multiple detection heads for epistemic uncertainty estimation.
-    
-    This class implements an ensemble approach where multiple classification heads are used to estimate
-    epistemic uncertainty through variance in predictions across ensemble members.
-    
-    Attributes:
-        num_ensemble (int): Number of ensemble members (detection heads).
-        cv3 (nn.ModuleList): List of ensemble classification heads for each feature level.
+    YOLO Detect head with ensemble of classification heads for uncertainty estimation.
+
+    This class uses multiple classification heads per detection layer and aggregates their predictions
+    to estimate uncertainty via entropy over the ensemble outputs.
     """
-    
-    def __init__(self, nc=80, ch=(), num_ensemble=5):
+
+    def __init__(self, nc=80, ch=(), num_ensemble_heads=5):
         """
-        Initialize the YOLO detection ensemble head.
-        
+        Initialize the ensemble detection head.
+
         Args:
             nc (int): Number of classes.
             ch (tuple): Tuple of channel sizes from backbone feature maps.
-            num_ensemble (int): Number of ensemble members (detection heads).
+            num_ensemble_heads (int): Number of ensemble members.
         """
         super().__init__(nc, ch)
-        self.nc = nc  # number of classes
-        self.nl = len(ch)  # number of detection layers
-        self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
-        self.no = nc + self.reg_max * 4  # number of outputs per anchor
-        self.stride = torch.zeros(self.nl)  # strides computed during build
-        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
-        self.num_ensemble = num_ensemble
+        self.num_ensemble_heads = num_ensemble_heads
 
-        self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
-        )
+        self.dropout_methods = ['DropBlock2D', 'Dropout', 'Dropout2d', 'Dropout3d']
+        self.dropout_method_idx = 0
+        self.dropout_rate = 0.1
+        self.dropblock_size = 3
+        self._create_dropout_layers()
 
-        self.cv3 = nn.ModuleList([
-            nn.ModuleList([
-                nn.Sequential(
-                    nn.Sequential(DWConv(x, x, 3), Conv(x, c3, 1)),
-                    nn.Sequential(DWConv(c3, c3, 3), Conv(c3, c3, 1)),
-                    nn.Conv2d(c3, self.nc, 1),
-                ) for _ in range(self.num_ensemble)
-            ]) for x in ch
-        ])
+    def _create_dropout_layers(self):
+        """Create per-level, per-member dropout modules (in and out) according to current settings."""
+        method = self.dropout_methods[self.dropout_method_idx]
+        def make_one():
+            if method == 'DropBlock2D':
+                return DropBlock2D(drop_prob=self.dropout_rate, block_size=self.dropblock_size)
+            if method == 'Dropout2d':
+                return nn.Dropout2d(p=self.dropout_rate)
+            if method == 'Dropout3d':
+                return nn.Dropout3d(p=self.dropout_rate)
+            if method == 'Dropout':
+                return nn.Dropout(p=self.dropout_rate)
+            raise ValueError(f"Unknown dropout_method: {method}")
 
-        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+        self.dropout_layer = nn.ModuleList([])
+        for _ in range(self.nl):
+            di_list= nn.ModuleList([])
+            for _ in range(self.num_ensemble_heads):
+                di = make_one()
+                di_list.append(di)
+            self.dropout_layer.append(di_list)
 
-        if self.end2end:
-            self.one2one_cv2 = copy.deepcopy(self.cv2)
-            self.one2one_cv3 = copy.deepcopy(self.cv3)
+        self.cv3_ens = nn.ModuleList([])
+        for i in range(self.nl):
+            heads_i = nn.ModuleList([self.cv3[i]])
+            for _ in range(self.num_ensemble_heads - 1):
+                heads_i.append(copy.deepcopy(self.cv3[i]))
+            self.cv3_ens.append(heads_i)
 
-    def forward(self, x, num_ensemble_forward_passes=None):
+    def set_dropout_rates(self, dropout_rate: float, dropout_method_idx: float = None, dropblock_size: float = None):
+        """Set dropout rates and update dropout method"""
+        if dropout_method_idx is not None:
+            assert 0 <= int(dropout_method_idx) < len(self.dropout_methods)
+            self.dropout_method_idx = int(dropout_method_idx)
+        if dropblock_size is not None:
+            self.dropblock_size = int(dropblock_size)
+        self.dropout_rate = float(dropout_rate)
+        self._create_dropout_layers()
+
+    @property
+    def dropout_method(self) -> str:
+        """Get the current dropout method string."""
+        return self.dropout_methods[self.dropout_method_idx]
+
+    def forward(self, x):
         """
         Perform forward pass through the ensemble detection head.
         
         Args:
             x (List[torch.Tensor]): Input feature maps from backbone.
-            num_ensemble_forward_passes (int, optional): Number of ensemble forward passes. 
-                If None, uses self.num_ensemble.
-                
         Returns:
             Union[List[torch.Tensor], Tuple]: During training, returns feature maps. 
-                During inference, returns predictions with epistemic uncertainty.
+                During inference, returns predictions with uncertainty.
         """
         if self.end2end:
             return self.forward_end2end(x)
-        num_ensemble = self.num_ensemble if num_ensemble_forward_passes is None else num_ensemble_forward_passes
+
         if self.training:
             for i in range(self.nl):
-                # Compute the mean of all ensemble heads for this layer
-                ensemble_outputs = [self.cv3[i][j](x[i]) for j in range(self.num_ensemble)]
-                mean_ensemble = torch.mean(torch.stack(ensemble_outputs, dim=0), dim=0)
-                x[i] = torch.cat((self.cv2[i](x[i]), mean_ensemble), 1)
+                # Randomly select one of the ensemble heads for training
+                j = torch.randint(self.num_ensemble_heads, (1,), device=x[i].device).item()
+                cls = self.cv3_ens[i][j](self.dropout_layer[i][j](x[i]))
+                x[i] = torch.cat((self.cv2[i](x[i]), cls), 1)
             return x
+
+        # inference: deterministic heads (dropout disabled in eval()), compute uncertainty across members
         xs = []
-        for j in range(num_ensemble):
-            temp_x = [torch.cat((self.cv2[i](x[i]), self.cv3[i][j](x[i])), 1) for i in range(self.nl)]
-            xs.append(temp_x)
+        for j in range(self.num_ensemble_heads):
+            this = []
+            for i in range(self.nl):
+                cls = self.cv3_ens[i][j](self.dropout_layer[i][j](x[i]))
+                this.append(torch.cat((self.cv2[i](x[i]), cls), 1))
+            xs.append(this)
+
         y = self._inference(xs)
+
         x_mean = []
         for i in range(self.nl):
-            ch_stacked = []
-            for x_ in xs:
-                ch_stacked.append(x_[i])
-            x_mean.append(torch.mean(torch.stack(ch_stacked), dim=0))
+            x_mean.append(torch.mean(torch.stack([t[i] for t in xs], dim=0), dim=0))
         return y if self.export else (y, x_mean)
 
     def forward_end2end(self, x):
-        """
-        Perform forward pass for end-to-end detection with ensemble.
-        
-        Args:
-            x (List[torch.Tensor]): Input feature maps from backbone.
-            
-        Returns:
-            Union[dict, Tuple]: During training, returns dictionary with one2many and one2one outputs.
-                During inference, returns processed predictions.
-        """
-        x_detach = [xi.detach() for xi in x]
-        one2one = [
-            torch.cat((self.one2one_cv2[i](x_detach[i]), self.one2one_cv3[i][0](x_detach[i])), 1) for i in range(self.nl)
-        ]
-        for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i][0](x[i])), 1)
-        if self.training:
-            return {"one2many": x, "one2one": one2one}
-        y = self._inference([one2one])
-        y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
-        return y if self.export else (y, {"one2many": x, "one2one": one2one})
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
 
     def _inference(self, xs):
         """
-        Perform inference with ensemble predictions to compute epistemic uncertainty.
+        Perform inference with ensemble predictions to compute uncertainty.
         
         Args:
             xs (List[List[torch.Tensor]]): List of feature maps from each ensemble member.
             
         Returns:
-            torch.Tensor: Predictions with epistemic uncertainty appended.
+            torch.Tensor: Predictions with uncertainty appended.
         """
         shape = xs[0][0].shape  # BCHW
         x_mean = []
@@ -1450,152 +1465,7 @@ class DetectEnsemble(Detect):
         # Collect multiple class probability predictions from ensemble
         cls_samples = torch.stack([cls.transpose(-1, -2)
                                 for _, cls in (x_cat.split((self.reg_max * 4, self.nc), dim=1) for x_cat in x_cats)], dim=0)
-        epistemic_uncertainty = calculate_classification_multi_sample_entropy(cls_samples.softmax(2)).transpose(-1, -2)
-        if self.export and self.format in {"tflite", "edgetpu"}:
-            grid_h = shape[2]
-            grid_w = shape[3]
-            grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
-            norm = self.strides / (self.stride[0] * grid_size)
-            dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
-        elif self.export and self.format == "imx":
-            dbox = self.decode_bboxes(
-                self.dfl(box) * self.strides, self.anchors.unsqueeze(0) * self.strides, xywh=False
-            )
-            return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1), epistemic_uncertainty.permute(0, 2, 1)
-        else:
-            dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
-        return torch.cat((dbox, cls.sigmoid(), epistemic_uncertainty), 1)
-
-    def bias_init(self):
-        """Initialize biases for ensemble detection heads."""
-        m = self
-        for a, cv3_list, s in zip(m.cv2, m.cv3, m.stride):
-            a[-1].bias.data[:] = 1.0  # box
-            for b in cv3_list:
-                b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)
-        if self.end2end:
-            for a, cv3_list, s in zip(m.one2one_cv2, m.one2one_cv3, m.stride):
-                a[-1].bias.data[:] = 1.0
-                for b in cv3_list:
-                    b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)
-
-
-class DetectEnsemble(Detect):
-    """
-    YOLO Detect head with ensemble of classification heads for epistemic uncertainty estimation.
-
-    This class uses multiple classification heads per detection layer and aggregates their predictions
-    to estimate epistemic uncertainty via entropy over the ensemble outputs.
-    """
-
-    def __init__(self, nc=80, ch=(), num_ensemble=5):
-        """
-        Initialize the ensemble detection head.
-
-        Args:
-            nc (int): Number of classes.
-            ch (tuple): Tuple of channel sizes from backbone feature maps.
-            num_ensemble (int): Number of ensemble members.
-        """
-        super().__init__(nc, ch)
-        self.num_ensemble = num_ensemble
-        c2 = max((16, ch[0] // 4, self.reg_max * 4))
-        c3 = max(ch[0], min(self.nc, 100))
-
-        # Box regression heads (shared)
-        self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
-        )
-        # Ensemble of classification heads per detection layer
-        self.cv3 = nn.ModuleList([
-            nn.ModuleList([
-                nn.Sequential(
-                    DropBlock2D(drop_prob=0.2, block_size=3),
-                    nn.Sequential(DWConv(x, x, 3), Conv(x, c3, 1)),
-                    nn.Sequential(DWConv(c3, c3, 3), Conv(c3, c3, 1)),
-                    nn.Conv2d(c3, self.nc, 1)
-                ) for _ in range(num_ensemble)
-            ]) for x in ch
-        ])
-        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
-
-        if self.end2end:
-            self.one2one_cv2 = copy.deepcopy(self.cv2)
-            self.one2one_cv3 = copy.deepcopy(self.cv3)
-
-    def forward(self, x, num_ensemble_forward_passes=None):
-        """
-        Forward pass with ensemble heads.
-
-        Args:
-            x (List[torch.Tensor]): Input feature maps.
-            num_ensemble_forward_passes (int, optional): Number of ensemble members to use.
-
-        Returns:
-            During training: feature maps.
-            During inference: predictions with epistemic uncertainty.
-        """
-        if self.end2end:
-            return self.forward_end2end(x)
-        num_ensemble = self.num_ensemble if num_ensemble_forward_passes is None else num_ensemble_forward_passes
-
-        if self.training:
-            # Use mean of ensemble heads for each layer
-            for i in range(self.nl):
-                cls_heads = [self.cv3[i][j](x[i]) for j in range(num_ensemble)]
-                cls_mean = torch.mean(torch.stack(cls_heads, 0), 0)
-                x[i] = torch.cat((self.cv2[i](x[i]), cls_mean), 1)
-            return x
-
-        # Inference: collect outputs from all ensemble heads
-        ensemble_outputs = []
-        for j in range(num_ensemble):
-            out = [torch.cat((self.cv2[i](x[i]), self.cv3[i][j](x[i])), 1) for i in range(self.nl)]
-            ensemble_outputs.append(out)
-
-        y = self._inference(ensemble_outputs)
-        # Optionally, also return mean feature maps for analysis
-        x_mean = []
-        for i in range(self.nl):
-            stacked = [out[i] for out in ensemble_outputs]
-            x_mean.append(torch.mean(torch.stack(stacked, 0), 0))
-        return y if self.export else (y, x_mean)
-
-    def _inference(self, xs):
-        """
-        Inference with ensemble outputs to compute epistemic uncertainty.
-
-        Args:
-            xs (List[List[torch.Tensor]]): List of ensemble outputs.
-
-        Returns:
-            torch.Tensor: Predictions with epistemic uncertainty appended.
-        """
-        shape = xs[0][0].shape  # BCHW
-        # Stack and mean predictions
-        x_cats = torch.stack([torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2) for x in xs], 0)
-        x_cat = torch.mean(x_cats, 0)
-
-        if self.format != "imx" and (self.dynamic or self.shape != shape):
-            # Use mean for anchor generation
-            x_mean = [torch.mean(torch.stack([x[i] for x in xs], 0), 0) for i in range(self.nl)]
-            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x_mean, self.stride, 0.5))
-            self.shape = shape
-
-        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:
-            box = x_cat[:, : self.reg_max * 4]
-            cls = x_cat[:, self.reg_max * 4 :]
-        else:
-            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
-
-        # Collect class probability predictions from all ensemble heads
-        cls_samples = torch.stack([
-            cls_.transpose(-1, -2)
-            for _, cls_ in (x_cat_.split((self.reg_max * 4, self.nc), 1) for x_cat_ in x_cats)
-        ], 0)
-        # Compute epistemic uncertainty (entropy over ensemble softmax outputs)
-        uncertainty = calculate_classification_multi_sample_entropy(cls_samples.softmax(2)).transpose(-1, -2)
-
+        uncertainty = calc_cls_softmax_multi_sample_uncertainty(cls_samples.softmax(-1)).transpose(-1, -2)
         if self.export and self.format in {"tflite", "edgetpu"}:
             grid_h = shape[2]
             grid_w = shape[3]
@@ -1609,52 +1479,33 @@ class DetectEnsemble(Detect):
             return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1), uncertainty.permute(0, 2, 1)
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
-
         return torch.cat((dbox, cls.sigmoid(), uncertainty), 1)
-
-    def forward_end2end(self, x):
-        """
-        End-to-end forward for ensemble head.
-
-        Args:
-            x (List[torch.Tensor]): Input feature maps.
-
-        Returns:
-            dict or tuple: Outputs for training or inference.
-        """
-        x_detach = [xi.detach() for xi in x]
-        # Use first ensemble head for one2one
-        one2one = [
-            torch.cat((self.one2one_cv2[i](x_detach[i]), self.one2one_cv3[i][0](x_detach[i])), 1) for i in range(self.nl)
-        ]
-        for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i][0](x[i])), 1)
-        if self.training:
-            return {"one2many": x, "one2one": one2one}
-        y = self._inference([one2one])
-        y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
-        return y if self.export else (y, {"one2many": x, "one2one": one2one})
 
     def bias_init(self):
         """Initialize biases for ensemble detection heads."""
         m = self
-        for a, cv3_list, s in zip(m.cv2, m.cv3, m.stride):
-            a[-1].bias.data[:] = 1.0  # box
-            for b in cv3_list:
-                b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)
+        for a, heads, s in zip(m.cv2, self.cv3_ens, m.stride):
+            a[-1].bias.data[:] = 1.0
+            for b in heads:
+                b[-1].bias.data[: self.nc] = math.log(5 / self.nc / (640 / s) ** 2)
+        
         if self.end2end:
-            for a, cv3_list, s in zip(m.one2one_cv2, m.one2one_cv3, m.stride):
+            for a, heads, s in zip(m.one2one_cv2, m.one2one_cv3, m.stride):
                 a[-1].bias.data[:] = 1.0
-                for b in cv3_list:
-                    b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)
+                for b in heads:
+                    b[-1].bias.data[: self.nc] = math.log(5 / self.nc / (640 / s) ** 2)
+
+    @staticmethod
+    def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
 
 
 class DetectMCDropout(Detect):
     """
-    YOLO Detect head with Monte Carlo Dropout for epistemic uncertainty estimation.
+    YOLO Detect head with Monte Carlo Dropout for uncertainty estimation.
     
     This class implements MC Dropout by keeping dropout layers active during inference
-    and performing multiple forward passes to estimate epistemic uncertainty.
+    and performing multiple forward passes to estimate uncertainty.
     
     Attributes:
         cv3 (nn.ModuleList): Classification heads with DropBlock2D layers for MC sampling.
@@ -1669,38 +1520,53 @@ class DetectMCDropout(Detect):
             ch (tuple): Tuple of channel sizes from backbone feature maps.
         """
         super().__init__(nc, ch)
-        self.nc = nc  # number of classes
-        self.nl = len(ch)  # number of detection layers
-        self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
-        self.no = nc + self.reg_max * 4  # number of outputs per anchor
-        self.stride = torch.zeros(self.nl)  # strides computed during build
-        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
+        self.dropout_methods = ['DropBlock2D', 'Dropout', 'Dropout2d', 'Dropout3d']
+        
+        # Default dropout parameters, overridden by set_dropout_rates
+        self.dropout_rate = 0.1
+        self.dropblock_size = 3
+        self.num_mc_forward_passes = 10
+        self.dropout_method_idx = 0  # Default to DropBlock2D (index 0)
 
-        self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
-        )
+        self._create_dropout_layers()
 
-        self.cv3 = (
-            nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
-            if self.legacy
-            else nn.ModuleList(
-                nn.Sequential(
-                    DropBlock2D(drop_prob=0.2, block_size=3), # TODO: dropout probability could be set with train() call
-                    nn.Sequential(DWConv(x, x, 3), Conv(x, c3, 1)),
-                    nn.Sequential(DWConv(c3, c3, 3), Conv(c3, c3, 1)),
-                    nn.Conv2d(c3, self.nc, 1),
-                )
-                for x in ch
-            )
-        )
+    def _create_dropout_layers(self):
+        """Create dropout layers as instance variables."""
+        dropout_method = self.dropout_methods[self.dropout_method_idx]
+        
+        if dropout_method == 'DropBlock2D':
+            self.dropout_layer = DropBlock2D(drop_prob=self.dropout_rate, block_size=self.dropblock_size)
+        elif dropout_method == 'Dropout2d':
+            self.dropout_layer = nn.Dropout2d(p=self.dropout_rate)
+        elif dropout_method == 'Dropout3d':
+            self.dropout_layer = nn.Dropout3d(p=self.dropout_rate)
+        elif dropout_method == 'Dropout':
+            self.dropout_layer = nn.Dropout(p=self.dropout_rate)
+        else:
+            raise ValueError(f"Unknown dropout_method: {dropout_method}")
 
-        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+    def set_dropout_rates(self, dropout_rate: float, dropout_method_idx: float = None, dropblock_size: float = None):
+        """Set dropout rates and optionally change dropout method, recreating cv3 if needed."""
+        dropout_method_idx = int(dropout_method_idx)
+        dropblock_size = int(dropblock_size)
 
-        if self.end2end:
-            self.one2one_cv2 = copy.deepcopy(self.cv2)
-            self.one2one_cv3 = copy.deepcopy(self.cv3)
+        self.dropout_rate = dropout_rate
+        if dropout_method_idx is not None:
+            if 0 <= dropout_method_idx < len(self.dropout_methods):
+                self.dropout_method_idx = int(dropout_method_idx)
+            else:
+                raise ValueError(f"dropout_method_idx {dropout_method_idx} out of range [0, {len(self.dropout_methods)-1}]")
+        if dropblock_size is not None:
+            self.dropblock_size = dropblock_size
+        
+        self._create_dropout_layers()
+    
+    @property
+    def dropout_method(self) -> str:
+        """Get the current dropout method string."""
+        return self.dropout_methods[self.dropout_method_idx]
 
-    def forward(self, x, num_mc_forward_passes=5):
+    def forward(self, x):
         """
         Perform forward pass with Monte Carlo Dropout sampling.
         
@@ -1710,25 +1576,28 @@ class DetectMCDropout(Detect):
             
         Returns:
             Union[List[torch.Tensor], Tuple]: During training, returns feature maps.
-                During inference, returns predictions with epistemic uncertainty.
+                During inference, returns predictions with uncertainty.
         """
         if self.end2end:
             return self.forward_end2end(x)
 
-        if self.training: 
+        if self.training:
             for i in range(self.nl):
-                x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+                xi = self.dropout_layer(x[i])
+                cls = self.cv3[i](xi)
+                x[i] = torch.cat((self.cv2[i](x[i]), cls), 1)
             return x
-        else:   
-            for l in self.cv3:
-                for m in l.modules():
-                    if isinstance(m, DropBlock2D):
-                        m.train()                        
 
-            xs = []
-            for _ in range(num_mc_forward_passes):
-                temp_x = [torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1) for i in range(self.nl)]
-                xs.append(temp_x)
+        # inference: enable MC Dropout by forcing dropout to train mode
+        self.dropout_layer.train()
+        xs = []
+        for _ in range(self.num_mc_forward_passes):
+            this = []
+            for i in range(self.nl):
+                xi = self.dropout_layer(x[i])
+                cls = self.cv3[i](xi)
+                this.append(torch.cat((self.cv2[i](x[i]), cls), 1))
+            xs.append(this)
 
             y = self._inference(xs)
 
@@ -1741,37 +1610,17 @@ class DetectMCDropout(Detect):
             return y if self.export else (y, x_mean)
 
     def forward_end2end(self, x):
-        """
-        Perform forward pass for end-to-end detection with MC Dropout.
-        
-        Args:
-            x (List[torch.Tensor]): Input feature maps from backbone.
-            
-        Returns:
-            Union[dict, Tuple]: During training, returns dictionary with one2many and one2one outputs.
-                During inference, returns processed predictions.
-        """
-        x_detach = [xi.detach() for xi in x]
-        one2one = [
-            torch.cat((self.one2one_cv2[i](x_detach[i]), self.one2one_cv3[i](x_detach[i])), 1) for i in range(self.nl)
-        ]
-        for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i][0](x[i])), 1)
-        if self.training:
-            return {"one2many": x, "one2one": one2one}
-        y = self._inference([one2one])
-        y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
-        return y if self.export else (y, {"one2many": x, "one2one": one2one})
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
 
     def _inference(self, xs):
         """
-        Perform inference with MC Dropout predictions to compute epistemic uncertainty.
+        Perform inference with MC Dropout predictions to compute uncertainty.
         
         Args:
             xs (List[List[torch.Tensor]]): List of feature maps from each MC forward pass.
             
         Returns:
-            torch.Tensor: Predictions with epistemic uncertainty appended.
+            torch.Tensor: Predictions with uncertainty appended.
         """
         # Inference path
         shape = xs[0][0].shape  # BCHW
@@ -1799,7 +1648,7 @@ class DetectMCDropout(Detect):
         cls_samples = torch.stack([cls.transpose(-1, -2) 
                                 for _, cls in (x_cat.split((self.reg_max * 4, self.nc), dim=1) for x_cat in x_cats)], dim=0)
 
-        uncertainty = calculate_classification_multi_sample_entropy(cls_samples.softmax(2)).transpose(-1, -2)
+        uncertainty = calc_cls_softmax_multi_sample_uncertainty(cls_samples.softmax(-1)).transpose(-1, -2)
 
         if self.export and self.format in {"tflite", "edgetpu"}:
             # Precompute normalization factor to increase numerical stability
@@ -1819,13 +1668,84 @@ class DetectMCDropout(Detect):
 
         return torch.cat((dbox, cls.sigmoid(), uncertainty), 1)
     
+    @staticmethod
+    def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
+    
+
+class DetectDFLUncertainty(Detect):
+    """
+    YOLO Detect head that extracts DFL (Distribution Focal Loss) box coordinate uncertainty via entropy.
+    For each bounding box, calculates the entropy of the DFL distribution for each coordinate before decode_bboxes,
+    and appends this as an additional output channel per box.
+    """
+    def __init__(self, nc: int = 80, ch: Tuple = ()):  # same as Detect
+        super().__init__(nc, ch)
+
+    def forward(self, x: List[torch.Tensor]) -> Union[List[torch.Tensor], Tuple]:
+        if self.end2end:
+            return self.forward_end2end(x)
+        for i in range(self.nl):
+            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+        if self.training:
+            return x
+        y = self._inference(x)
+        if self.export:
+            return y
+        return y, x
+
+    def _inference(self, x: List[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Like _inference, but also returns DFL entropy per box (before decode_bboxes).
+        """
+        shape = x[0].shape  # BCHW
+        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        if self.format != "imx" and (self.dynamic or self.shape != shape):
+            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+            self.shape = shape
+        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:
+            box = x_cat[:, : self.reg_max * 4]
+            cls = x_cat[:, self.reg_max * 4 :]
+        else:
+            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+        
+        batch_size, _, num_anchors = box.shape # box: (batch_size, reg_max*4, num_anchors)
+        box_view = box.view(batch_size, 4, self.reg_max, num_anchors)  # (batch_size, 4, reg_max, num_anchors)
+        box_probs = box_view.softmax(2)  # (batch_size, 4, reg_max, num_anchors)
+        dfl_entropy = -(box_probs * (box_probs.clamp(min=1e-8).log())).sum(2)  # (batch_size, 4, num_anchors) entropy per box coordinate
+        dfl_entropy = dfl_entropy.mean(1, keepdim=True)  # (batch_size, 1, num_anchors) mean entropy across 4 coordinates
+        dfl_entropy = dfl_entropy  # (batch_size, 1, num_anchors)
+
+        if self.export and self.format in {"tflite", "edgetpu"}:
+            grid_h = shape[2]
+            grid_w = shape[3]
+            grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
+            norm = self.strides / (self.stride[0] * grid_size)
+            dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
+        elif self.export and self.format == "imx":
+            dbox = self.decode_bboxes(
+                self.dfl(box) * self.strides, self.anchors.unsqueeze(0) * self.strides, xywh=False
+            )
+            return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1), dfl_entropy.permute(0, 2, 1)
+        else:
+            dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+
+        return torch.cat((dbox, cls.sigmoid(), dfl_entropy), 1)
+
+    def forward_end2end(self, x):
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
+    
+    @staticmethod
+    def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
+    
 
 class DetectEDLMEH(Detect):
     """
     YOLO Detect head with Evidential Deep Learning (EDL) and Model Evidence Head (MEH).
     
     This class implements EDL with MEH according to Park et al. 2023 for uncertainty estimation.
-    It uses a Dirichlet distribution to model epistemic uncertainty through evidence parameters.
+    It uses a Dirichlet distribution to model uncertainty through evidence parameters.
     
     Paper Reference:
         Park, Younghyun, et al. "Active learning for object detection with evidential deep learning 
@@ -1884,6 +1804,13 @@ class DetectEDLMEH(Detect):
             self.one2one_cv3 = copy.deepcopy(self.cv3)
             self.one2one_meh_lambda = copy.deepcopy(self.meh_lambda)
 
+        self.meh_lambda_activation_idx = 0 # default to 'exp'
+        self._meh_lambda_act = resolve_meh_lambda_activation(self.meh_lambda_activation_idx)
+
+    def set_meh_lambda_activation_idx(self, idx):
+        self.meh_lambda_activation_idx = idx
+        self._meh_lambda_act = resolve_meh_lambda_activation(idx)
+
     def forward(self, x):
         """
         Perform forward pass with EDL MEH uncertainty estimation.
@@ -1893,49 +1820,29 @@ class DetectEDLMEH(Detect):
             
         Returns:
             Union[List[torch.Tensor], Tuple]: During training, returns feature maps.
-                During inference, returns predictions with epistemic uncertainty.
+                During inference, returns predictions with uncertainty.
         """
         if self.end2end:
             return self.forward_end2end(x)
         for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i]), torch.clamp(torch.exp(self.meh_lambda[i](x[i])), min=0.01, max=100)), 1)
+            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i]), torch.clamp(self._meh_lambda_act(self.meh_lambda[i](x[i])), min=0.01, max=100)), 1)
         if self.training:
             return x
         y = self._inference(x)
         return y if self.export else (y, x)
 
     def forward_end2end(self, x):
-        """
-        Perform forward pass for end-to-end detection with EDL MEH.
-        
-        Args:
-            x (List[torch.Tensor]): Input feature maps from backbone.
-            
-        Returns:
-            Union[dict, Tuple]: During training, returns dictionary with one2many and one2one outputs.
-                During inference, returns processed predictions.
-        """
-        x_detach = [xi.detach() for xi in x]
-        one2one = [
-            torch.cat((self.one2one_cv2[i](x_detach[i]), self.one2one_cv3[i](x_detach[i]), torch.exp(self.one2one_meh_lambda[i](x_detach[i]))), 1) for i in range(self.nl)
-        ]
-        for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i]), torch.relu(self.meh_lambda[i](x[i]))), 1)
-        if self.training:
-            return {"one2many": x, "one2one": one2one}
-        y = self._inference(one2one)
-        y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
-        return y if self.export else (y, {"one2many": x, "one2one": one2one})
-
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
+    
     def _inference(self, x):
         """
-        Perform inference with EDL MEH to compute epistemic uncertainty using Dirichlet distribution.
+        Perform inference with EDL MEH to compute uncertainty using Dirichlet distribution.
         
         Args:
             x (List[torch.Tensor]): Input feature maps with evidence parameters.
             
         Returns:
-            torch.Tensor: Predictions with epistemic uncertainty appended.
+            torch.Tensor: Predictions with uncertainty appended.
         """
         shape = x[0].shape  # BCHW
         x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
@@ -1956,7 +1863,7 @@ class DetectEDLMEH(Detect):
         alphas = torch.clamp(alphas, min=1e-6)
         dirichlet_dist = Dirichlet(alphas)
         samples = dirichlet_dist.sample(torch.tensor([50]))
-        uncertainty = calculate_classification_multi_sample_entropy(samples).transpose(-1, -2)
+        uncertainty = calc_cls_softmax_multi_sample_uncertainty(samples).transpose(-1, -2)
         if self.export and self.format in {"tflite", "edgetpu"}:
             grid_h = shape[2]
             grid_w = shape[3]
@@ -1985,98 +1892,38 @@ class DetectEDLMEH(Detect):
                 b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)
                 c[-1].bias.data[: 1] = math.log(5 / 1 / (640 / s) ** 2)
 
-    def decode_bboxes(self, bboxes, anchors, xywh=True):
-        """Decode bounding boxes."""
-        return dist2bbox(bboxes, anchors, xywh=xywh and (not self.end2end), dim=1)
-
     @staticmethod
     def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
-        """
-        Post-processes YOLO model predictions.
-
-        Args:
-            preds (torch.Tensor): Raw predictions with shape (batch_size, num_anchors, 4 + nc) with last dimension
-                format [x, y, w, h, class_probs].
-            max_det (int): Maximum detections per image.
-            nc (int, optional): Number of classes. Default: 80.
-
-        Returns:
-            (torch.Tensor): Processed predictions with shape (batch_size, min(max_det, num_anchors), 6) and last
-                dimension format [x, y, w, h, max_class_prob, class_index].
-        """
-        # TODO
-        batch_size, anchors, _ = preds.shape  # i.e. shape(16,8400,84)
-        boxes, scores = preds.split([4, nc], dim=-1)
-        index = scores.amax(dim=-1).topk(min(max_det, anchors))[1].unsqueeze(-1)
-        boxes = boxes.gather(dim=1, index=index.repeat(1, 1, 4))
-        scores = scores.gather(dim=1, index=index.repeat(1, 1, nc))
-        scores, index = scores.flatten(1).topk(min(max_det, anchors))
-        i = torch.arange(batch_size)[..., None]  # batch indices
-        return torch.cat([boxes[i, index // nc], scores[..., None], (index % nc)[..., None].float()], dim=-1)
+        raise NotImplementedError("Not implemented to handle uncertainty output yet.")
 
 
-class DetectDFLUncertainty(Detect):
-    """
-    YOLO Detect head that extracts DFL (Distribution Focal Loss) box coordinate uncertainty via entropy.
-    For each bounding box, calculates the entropy of the DFL distribution for each coordinate before decode_bboxes,
-    and appends this as an additional output channel per box.
-    """
-    def __init__(self, nc: int = 80, ch: Tuple = ()):  # same as Detect
-        super().__init__(nc, ch)
-
-    def forward(self, x: List[torch.Tensor]) -> Union[List[torch.Tensor], Tuple]:
-        if self.end2end:
-            return self.forward_end2end(x)
-        for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
-        if self.training:
-            return x
-        y = self._inference(x)
-        if self.export:
-            return y
-        return y, x
-
-    def _inference(self, x: List[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Like _inference, but also returns DFL entropy per box (before decode_bboxes).
-        """
-        shape = x[0].shape  # BCHW
-        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
-        if self.format != "imx" and (self.dynamic or self.shape != shape):
-            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
-            self.shape = shape
-        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:
-            box = x_cat[:, : self.reg_max * 4]
-            cls = x_cat[:, self.reg_max * 4 :]
-        else:
-            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
-        
-        batch_size, _, num_anchors = box.shape # box: (batch_size, reg_max*4, num_anchors)
-        box_view = box.view(batch_size, 4, self.reg_max, num_anchors)  # (batch_size, 4, reg_max, num_anchors)
-        box_probs = box_view.softmax(2)  # (batch_size, 4, reg_max, num_anchors)
-        dfl_entropy = -(box_probs * (box_probs.clamp(min=1e-8).log())).sum(2)  # (batch_size, 4, num_anchors) entropy per box coordinate
-        dfl_entropy = dfl_entropy.mean(1, keepdim=True)  # (batch_size, 1, num_anchors) mean entropy across 4 coordinates
-        dfl_entropy = dfl_entropy  # (batch_size, 1, num_anchors)
-
-        if self.export and self.format in {"tflite", "edgetpu"}:
-            # Precompute normalization factor to increase numerical stability
-            # See https://github.com/ultralytics/ultralytics/issues/7371
-            grid_h = shape[2]
-            grid_w = shape[3]
-            grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
-            norm = self.strides / (self.stride[0] * grid_size)
-            dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
-        elif self.export and self.format == "imx":
-            dbox = self.decode_bboxes(
-                self.dfl(box) * self.strides, self.anchors.unsqueeze(0) * self.strides, xywh=False
+def initialize_uncertainty_layers(model, args):
+    for m in model.modules():
+        class_name = m.__class__.__name__
+        if class_name == "DetectMCDropout":
+                m.num_mc_forward_passes = int(args.num_mc_forward_passes)
+        if class_name == "DetectEnsemble":
+            m.num_ensemble_heads = int(args.num_ensemble_heads)
+        if class_name == "DetectMCDropout" or class_name == "DetectEnsemble":
+            m.set_dropout_rates(
+                args.dropout_rate,
+                args.dropout_method_idx,
+                args.dropblock_size,
             )
-            return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1), dfl_entropy.permute(0, 2, 1)
-        else:
-            dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+        if class_name == "DetectEDLMEH":
+            m.set_meh_lambda_activation_idx(int(args.meh_lambda_activation_idx))
+    
+MEH_LAMBDA_ACTIVATIONS = {
+    'exp': torch.exp,
+    'relu': torch.relu,
+    'softplus': torch.nn.functional.softplus,
+    'aglu': AGLU(),
+}
 
-        return torch.cat((dbox, cls.sigmoid(), dfl_entropy), 1)
-        # box_flat = box_probs * torch.arange(self.reg_max, device=box.device).view(1, 1, self.reg_max, 1)
-        # box_flat = box_flat.sum(2).view(batch_size, 4, num_anchors)  # (batch_size, 4, num_anchors)
-        # dbox = self.decode_bboxes(box_flat, self.anchors.unsqueeze(0)) * self.strides
-        # out = torch.cat((dbox, cls.sigmoid()), 1)  # (batch_size, 4+nc, num_anchors)
-        # return out, dfl_entropy
+def resolve_meh_lambda_activation(idx):
+    MEH_LAMBDA_ACTIVATION_NAMES = ['exp', 'relu', 'softplus', 'aglu']
+    if isinstance(idx, int) and 0 <= idx < len(MEH_LAMBDA_ACTIVATION_NAMES):
+        name = MEH_LAMBDA_ACTIVATION_NAMES[idx]
+        print(f"Using MEH lambda activation by index: {idx} -> {name}") # TODO: remove
+        return MEH_LAMBDA_ACTIVATIONS[name]
+    raise ValueError(f"Invalid meh_lambda_activation_idx: {idx}")

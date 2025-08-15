@@ -1489,10 +1489,6 @@ class MetricUncertainty(Metric):
         self.all_mue_entropy_thresholds_per_iou = [] # (1, 10)
         self.all_ue_correct_per_iou = [] # (1, 10)
         self.all_ue_incorrect_per_iou = [] # (1, 10)
-        self._max_map50_unc = None
-        self._max_map50_unc_threshold = None
-        self._max_map50_95_unc = None
-        self._max_map50_95_unc_threshold = None
 
     @property
     def mue50(self) -> float:
@@ -1579,9 +1575,22 @@ class MetricUncertainty(Metric):
         """
         return np.mean(self.all_ue_incorrect_per_iou) if len(self.all_ue_incorrect_per_iou) else 0.0
 
-    def fitness(self):
-        # TODO: Add uncertainty to the fitness calculation
-        return super().fitness()
+    def fitness(self) -> float:
+        """
+        Return uncertainty fitness as a weighted combination of detection and uncertainty metrics.
+        Where:
+            mAP50(B): self.map50
+            mAP50-95(B): self.map
+            mUE50: self.mue50
+            mUE50-95: self.mue
+        """
+        # (1 - mUE) to convert uncertainty error to fitness
+        return (
+            0.05 * self.map50 +
+            0.45 * self.map +
+            0.05 * (1 - self.mue50) +
+            0.45 * (1 - self.mue)
+        )
     
     def update_uncertainty(self, ue_results: tuple) -> None:
         """
@@ -1591,50 +1600,6 @@ class MetricUncertainty(Metric):
             ue_results (tuple): Tuple containing (all_mue, ue_thresholds, ue_correct, ue_incorrect).
         """
         self.all_mue_values_per_iou, self.all_mue_entropy_thresholds_per_iou, self.all_ue_correct_per_iou, self.all_ue_incorrect_per_iou = ue_results
-
-    @property
-    def max_map50_unc(self) -> float:
-        """
-        Return the maximum mAP@0.5 over all uncertainty thresholds.
-        """
-        return self._max_map50_unc if self._max_map50_unc is not None else 0.0
-
-    @max_map50_unc.setter
-    def max_map50_unc(self, value: float):
-        self._max_map50_unc = value
-
-    @property
-    def max_map50_unc_threshold(self) -> float:
-        """
-        Return the uncertainty threshold at which maximum mAP@0.5 occurs.
-        """
-        return self._max_map50_unc_threshold if self._max_map50_unc_threshold is not None else 0.0
-
-    @max_map50_unc_threshold.setter
-    def max_map50_unc_threshold(self, value: float):
-        self._max_map50_unc_threshold = value
-
-    @property
-    def max_map50_95_unc(self) -> float:
-        """
-        Return the maximum mAP@0.5-0.95 over all uncertainty thresholds.
-        """
-        return self._max_map50_95_unc if self._max_map50_95_unc is not None else 0.0
-
-    @max_map50_95_unc.setter
-    def max_map50_95_unc(self, value: float):
-        self._max_map50_95_unc = value
-
-    @property
-    def max_map50_95_unc_threshold(self) -> float:
-        """
-        Return the uncertainty threshold at which maximum mAP@0.5-0.95 occurs.
-        """
-        return self._max_map50_95_unc_threshold if self._max_map50_95_unc_threshold is not None else 0.0
-
-    @max_map50_95_unc_threshold.setter
-    def max_map50_95_unc_threshold(self, value: float):
-        self._max_map50_95_unc_threshold = value
 
 
 class DetMetricsUncertainty(DetMetrics):
@@ -1654,11 +1619,7 @@ class DetMetricsUncertainty(DetMetrics):
             "metrics/mUE50_correct",
             "metrics/mUE50_incorrect",
             "metrics/mUE50-95_correct",
-            "metrics/mUE50-95_incorrect",
-            "metrics/max_mAP50_unc",
-            "metrics/max_mAP50_unc_thres",
-            "metrics/max_mAP50-95_unc",
-            "metrics/max_mAP50-95_unc_thres",
+            "metrics/mUE50-95_incorrect"
         ]
 
     def mean_results(self) -> List[float]:
@@ -1670,11 +1631,7 @@ class DetMetricsUncertainty(DetMetrics):
             self.box.mue50_correct,
             self.box.mue50_incorrect,
             self.box.mue_correct,
-            self.box.mue_incorrect,
-            self.box.max_map50_unc,
-            self.box.max_map50_unc_threshold,
-            self.box.max_map50_95_unc,
-            self.box.max_map50_95_unc_threshold,
+            self.box.mue_incorrect
         ]
 
     @property
@@ -1688,11 +1645,7 @@ class DetMetricsUncertainty(DetMetrics):
             "metrics/mUE50_correct": self.box.mue50_correct,
             "metrics/mUE50_incorrect": self.box.mue50_incorrect,
             "metrics/mUE50-95_correct": self.box.mue_correct,
-            "metrics/mUE50-95_incorrect": self.box.mue_incorrect,
-            "metrics/max_mAP50_unc": self.box.max_map50_unc,
-            "metrics/max_mAP50_unc_thres": self.box.max_map50_unc_threshold,
-            "metrics/max_mAP50-95_unc": self.box.max_map50_95_unc,
-            "metrics/max_mAP50-95_unc_thres": self.box.max_map50_95_unc_threshold,
+            "metrics/mUE50-95_incorrect": self.box.mue_incorrect
         })
         return results
 
@@ -1706,12 +1659,6 @@ class DetMetricsUncertainty(DetMetrics):
             return stats
         mue_results = self.calculate_uncertainty_error(stats)
         self.box.update_uncertainty(mue_results)
-        # Calculate max mAP@0.5 and max mAP@0.5-0.95 over uncertainty thresholds
-        max_map50, max_map50_thr, max_map50_95, max_map50_95_thr = calculate_max_map_over_uncertainty(stats, self.names)
-        self.box.max_map50_unc = max_map50
-        self.box.max_map50_unc_threshold = max_map50_thr
-        self.box.max_map50_95_unc = max_map50_95
-        self.box.max_map50_95_unc_threshold = max_map50_95_thr
         return stats
 
     def calculate_uncertainty_error(self, stats: Dict[str, np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -1739,7 +1686,7 @@ class DetMetricsUncertainty(DetMetrics):
         ue_incorrect_per_iou = np.zeros(num_iou)
 
         # Uncertainty thresholds
-        thresholds = np.arange(0.01, 5.01, 0.01)
+        thresholds = np.arange(0.01, 10.01, 0.05)
 
         for i in range(num_iou):
             tp_i = tp[:, i]
@@ -1786,61 +1733,3 @@ class DetMetricsUncertainty(DetMetrics):
         """Clear the stored statistics."""
         for v in self.stats.values():
             v.clear()
-
-    def update_stats_uncertainty(self, stat: Dict[str, Any]) -> None:
-        """
-        Update only the uncertainty-related statistics by appending new values to 'tp_after_unc' and 'unc'.
-
-        Args:
-            stat (Dict[str, any]): Dictionary containing new statistical values to append.
-        """
-        self.stats["tp_after_unc"].append(stat["tp_after_unc"])
-        self.stats["unc"].append(stat["unc"])
-
-
-def calculate_max_map_over_uncertainty(
-    stats: Dict[str, np.ndarray],
-    names: Dict[int, str] = {},
-    thresholds: np.ndarray = np.arange(0.01, 5.01, 0.01)
-) -> tuple:
-    """
-    Given the ideal uncertainty threshold, and filtering out all detections with uncertainty above this threshold,
-    how much can mAP be improved (max_mAP) by filtering out detections with high uncertainty.
-
-    Returns:
-        (max_map50, max_map50_thr, max_map50_95, max_map50_95_thr)
-    """
-    max_map50 = -1.0
-    max_map50_thr = 0.0
-    max_map50_95 = -1.0
-    max_map50_95_thr = 0.0
-    tp_all = stats["tp"]
-    conf_all = stats["conf"]
-    pred_cls_all = stats["pred_cls"]
-    target_cls_all = stats["target_cls"]
-    unc_all = stats["unc"]
-
-    for thr in thresholds:
-        mask = unc_all <= thr
-        if not np.any(mask):
-            continue
-        tp = tp_all[mask]
-        conf = conf_all[mask]
-        pred_cls = pred_cls_all[mask]
-        if tp.ndim == 1:
-            tp = tp[:, None]
-        if tp.shape[0] == 0:
-            continue
-        results = ap_per_class(tp, conf, pred_cls, target_cls_all, names=names)
-        ap = results[5]  # ap shape (num_classes, num_iou_thresholds)
-        if ap.size == 0:
-            continue
-        map50 = ap[:, 0].mean() if ap.shape[1] > 0 else 0.0
-        map50_95 = ap.mean() if ap.size > 0 else 0.0
-        if map50 > max_map50:
-            max_map50 = map50
-            max_map50_thr = thr
-        if map50_95 > max_map50_95:
-            max_map50_95 = map50_95
-            max_map50_95_thr = thr
-    return float(max_map50), float(max_map50_thr), float(max_map50_95), float(max_map50_95_thr)

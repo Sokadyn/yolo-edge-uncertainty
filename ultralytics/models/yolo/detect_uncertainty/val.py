@@ -14,6 +14,7 @@ from ultralytics.utils.checks import check_requirements
 from ultralytics.utils.metrics import ConfusionMatrix, box_iou, DetMetricsUncertainty
 from ultralytics.utils.plotting import plot_images_with_uncertainty
 from ultralytics.models.yolo.detect import DetectionValidator
+from ultralytics.nn.modules.head import initialize_uncertainty_layers
 
 
 class DetectionValidatorUncertainty(DetectionValidator):
@@ -34,7 +35,9 @@ class DetectionValidatorUncertainty(DetectionValidator):
         super().__init__(dataloader, save_dir, args, _callbacks)
         self.metrics = DetMetricsUncertainty()
         self.uncertainty_bins = np.zeros(100)
-        self.bin_edges = np.linspace(0, 5, 101)
+        self.bin_edges = np.linspace(0, 10, 101)
+        if hasattr(self, 'model') and self.model is not None:
+            initialize_uncertainty_layers(self.model, self.args)
 
     def preprocess(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -79,9 +82,9 @@ class DetectionValidatorUncertainty(DetectionValidator):
 
     def get_desc(self) -> str:
         """Return a formatted string summarizing class metrics of YOLO model."""
-        return ("%22s" + "%11s" * 16) % (
+        return ("%22s" + "%11s" * 14) % (
             "Class", "Images", "Instances", "Box(P", "R", "mAP50", "mAP50-95", "mUE50", "mUE50_t", "mUE50-95", "mUE50-95_t",
-            "mUE50_c", "mUE50_i", "mUE50-95_c", "mUE50-95_i", "max_mAP50_unc", "max_mAP50-95_unc"
+            "mUE50_c", "mUE50_i", "mUE50-95_c", "mUE50-95_i"
         )
 
     def postprocess(self, preds: torch.Tensor) -> List[Dict[str, torch.Tensor]]:
@@ -132,10 +135,6 @@ class DetectionValidatorUncertainty(DetectionValidator):
         plt.xlim(self.bin_edges[0], self.bin_edges[-1])
         plt.grid(True)
         plt.tight_layout()
-
-        print("Head Name:", head_name)
-        print("Save Directory:", self.save_dir)
-        print(f"Saving uncertainty histogram to {self.save_dir / 'final_uncertainty_histogram.png'}")
 
         plt.savefig(str(self.save_dir / "uncertainty_histogram.png"))
         plt.close()
