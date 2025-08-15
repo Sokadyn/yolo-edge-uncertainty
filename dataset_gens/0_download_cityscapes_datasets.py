@@ -1,3 +1,26 @@
+#!/usr/bin/env python3
+"""
+This script automates the process of downloading and extracting the Cityscapes dataset,
+including its variants like Foggy Cityscapes and Rainy Cityscapes. It requires a
+PHP session ID for authentication, which can be obtained from the browser's developer
+tools after logging into the Cityscapes website.
+
+Usage:
+    python3 0_download_cityscapes_datasets.py <session_id>
+
+Arguments:
+    session_id (str): The PHP session ID used for authentication during download.
+
+Output:
+    The datasets are downloaded and extracted into the following directories:
+    - datasets/cityscapes: Original Cityscapes dataset.
+    - datasets/foggy_cityscapes: Foggy Cityscapes dataset.
+    - datasets/rainy_cityscapes: Rainy Cityscapes dataset.
+
+References:
+    - https://www.cityscapes-dataset.com
+"""
+
 import argparse
 import os
 import requests
@@ -6,11 +29,7 @@ import zipfile
 
 def download_and_unpack_zip(url, session_id, output_folder):
     headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Referer": "https://www.cityscapes-dataset.com/login/",
-        "Cookie": f"PHPSESSID={session_id}",
+        "Cookie": f"PHPSESSID={session_id}", # can get it from browser dev tools
     }
 
     with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
@@ -45,7 +64,7 @@ def download_and_unpack_zip(url, session_id, output_folder):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download and unpack a ZIP file from the Cityscapes dataset downloads page.")
-    parser.add_argument("session_id", type=str, help="The PHP session ID to use for downlading the original Cityscapes dataset")
+    parser.add_argument("session_id", type=str, required=True, help="The PHP session ID to use for downlading the original Cityscapes dataset")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     datasets_dir = os.path.join(os.path.dirname(script_dir), 'datasets')

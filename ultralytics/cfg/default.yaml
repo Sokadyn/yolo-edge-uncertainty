@@ -125,3 +125,17 @@ cfg: # (str, optional) for overriding defaults.yaml
 
 # Tracker settings ------------------------------------------------------------------------------------------------------
 tracker: botsort.yaml # (str) tracker type, choices=[botsort.yaml, bytetrack.yaml]
+
+# Uncertainty head settings -----------------------------------------------------------------------------------------------
+
+# MC Dropout (train, val) and Ensemble (train) settings
+dropout_method_idx: 1 # (int) dropout method index, choices=[0=DropBlock2D, 1=Dropout, 2=Dropout2d, 3=Dropout3d]
+dropout_rate_0: 0.13 # (float) dropout rate for the first dropout layer
+dropout_rate_1: 0.25 # (float) dropout rate for the second dropout layer
+dropblock_size: 9 # (int) size of the DropBlock2D blocks
+num_mc_forward_passes: 10 # (int) number of Monte Carlo forward passes for uncertainty estimation
+num_ensemble_heads: 10 # (int) number of ensemble heads for uncertainty estimation
+
+# EDL MEH loss settings ------------------------------------------------------------------------------------------------------
+edl_weight: 1.0 #1.35 # (float) EDL MEH loss weight
+meh_lambda_activation_idx: 0 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]

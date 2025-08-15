@@ -1,0 +1,16 @@
+# KITTI dataset configuration for YOLO
+path: ../datasets/kitti  # dataset root dir. Adjust this to your actual path
+train: images/train      # train images (relative to 'path')
+val: images/val          # val images (relative to 'path') TODO: fix val split
+test:                    # test images (optional, fill in if available)
+
+names:
+  0: Car
+  1: Pedestrian
+  2: Van
+  3: Cyclist
+  4: Truck
+  5: Misc
+  6: Tram
+  7: Person_sitting
+  
