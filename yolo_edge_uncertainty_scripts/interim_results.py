@@ -23,8 +23,8 @@ epochs = 25
 fraction = 1.0
 device = '0'
 imgsz = 320 * 2
-training = True
-val_during_training = False
+training = True # only run validation and load pretrained models
+val_during_training = False # validation after each epoch during training for extended results
 
 models = {
     "base-pretrained": YOLOEdgeUncertainty('yolo11n-base-confidence.yaml'),
