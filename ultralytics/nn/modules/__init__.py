@@ -93,7 +93,6 @@ from .head import (
     DetectEnsemble,
     DetectMCDropout,
     DetectEDLMEH,
-    DetectDFLUncertainty,
 )
 from .transformer import (
     AIFI,
@@ -190,5 +189,4 @@ __all__ = (
     "DetectEnsemble",
     "DetectMCDropout",
     "DetectEDLMEH",
-    "DetectDFLUncertainty"
 )

@@ -30,7 +30,6 @@ models = {
     "base-pretrained": YOLOEdgeUncertainty('yolo11n-base-confidence.yaml'),
     "base-confidence": YOLOEdgeUncertainty('yolo11n-base-confidence.yaml'),
     "base-uncertainty": YOLOEdgeUncertainty('yolo11n-base-uncertainty.yaml'),
-    "dfl-uncertainty": YOLOEdgeUncertainty('yolo11n-dfl-uncertainty.yaml'),
     "ensemble": YOLOEdgeUncertainty('yolo11n-ensemble.yaml'),
     "mc-dropout": YOLOEdgeUncertainty('yolo11n-mc-dropout.yaml'),
     "edl-meh": YOLOEdgeUncertainty('yolo11n-edl-meh.yaml'),
