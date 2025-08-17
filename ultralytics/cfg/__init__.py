@@ -957,7 +957,6 @@ def entrypoint(debug: str = "") -> None:
         or "ensemble" in stem
         or "mc-dropout" in stem
         or "edl-meh" in stem
-        or "dfl-uncertainty" in stem
     ):
         from ultralytics import YOLOEdgeUncertainty
         model = YOLOEdgeUncertainty(model)
