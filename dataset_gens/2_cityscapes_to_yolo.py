@@ -7,11 +7,11 @@ Usage:
 Requirements:
     - Cityscapes dataset should be located at '../datasets/cityscapes'
     - Foggy Cityscapes dataset should be located at '../datasets/foggy_cityscapes'
-    - Rainy Cityscapes dataset should be located at '../datasets/rainy_cityscapes'
+    - RainCityscapes dataset should be located at '../datasets/raincityscapes'
 
 Output:
     - Citiyscapes to YOLO format in '../datasets/cityscapes'.
-    (Similar structure for foggy and rainy datasets)
+    (Similar structure for foggy and rain datasets)
 """
 
 
@@ -26,7 +26,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 datasets_dir = os.path.join(os.path.dirname(script_dir), 'datasets')
 cityscapes_dir = os.path.join(datasets_dir, 'cityscapes')
 foggy_cityscapes_dir = os.path.join(datasets_dir, 'foggy_cityscapes')
-rainy_cityscapes_dir = os.path.join(datasets_dir, 'rainy_cityscapes')
+raincityscapes_dir = os.path.join(datasets_dir, 'raincityscapes')
 
 coco_annotations_dir = os.path.join(cityscapes_dir, 'annotations')
 image_root = cityscapes_dir # /leftImg8bit already in json annotations
@@ -117,8 +117,8 @@ for city in os.listdir(test_image_dir):
         img_path = os.path.join(city_image_dir, img_file)
         shutil.copy(img_path, os.path.join(yolo_image_dir_test, img_file))
 
-# go to foggy/rainy dir and copy all images from there and labels from cityscapes
-for image_dir_src in [os.path.join(foggy_cityscapes_dir, "leftImg8bit_foggyDBF"), os.path.join(rainy_cityscapes_dir, "leftImg8bit_rain")]:
+# go to foggy/rain dir and copy all images from there and labels from cityscapes
+for image_dir_src in [os.path.join(foggy_cityscapes_dir, "leftImg8bit_foggyDBF"), os.path.join(raincityscapes_dir, "leftImg8bit_rain")]:
     dataset_name = image_dir_src.split("/")[-2]
     for split in ["train", "val"]:
         
