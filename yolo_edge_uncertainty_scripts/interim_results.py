@@ -23,7 +23,7 @@ epochs = 25
 fraction = 1.0
 device = '0'
 imgsz = 320 * 2
-training = True # only run validation and load pretrained models
+training = False # only run validation and load pretrained models
 val_during_training = False # validation after each epoch during training for extended results
 
 models = {
@@ -74,7 +74,7 @@ for name, model in models.items():
         else:
             model.load(os.path.join(train_folder_name, 'weights', 'best.pt'))
 
-    for val_dataset in ['cityscapes-from-coco80.yaml', 'foggy-cityscapes-from-coco80.yaml', 'rainy-cityscapes-from-coco80.yaml', 'kitti-from-coco80.yaml']:
+    for val_dataset in ['cityscapes-from-coco80.yaml', 'foggy-cityscapes-from-coco80.yaml', 'raincityscapes-from-coco80.yaml', 'kitti-from-coco80.yaml']:
         val_dataset_name = os.path.splitext(os.path.basename(val_dataset))[0]
         print(f"Validating model {name} on {val_dataset_name}")
         val_folder_name = train_folder_name.replace(f'train-{train_dataset_name}', f"val-{val_dataset_name}")
