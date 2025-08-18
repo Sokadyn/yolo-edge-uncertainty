@@ -7,11 +7,11 @@ Usage:
 Requirements:
     - Cityscapes dataset should be located at '../datasets/cityscapes' with YOLO format labels
     - Foggy Cityscapes dataset should be located at '../datasets/foggy_cityscapes' with YOLO format labels
-    - Rainy Cityscapes dataset should be located at '../datasets/rainy_cityscapes' with YOLO format labels
+    - RainCityscapes dataset should be located at '../datasets/raincityscapes' with YOLO format labels
 
 Output:
     - Creates directories and organizes images and labels in COCO80 format at '../datasets/cityscapes_from_coco80'.
-    - Creates similar directory structures for foggy and rainy Cityscapes datasets with updated labels.
+    - Creates similar directory structures for foggy and RainCityscapes datasets with updated labels.
 """
 
 import os
@@ -24,7 +24,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 datasets_dir = os.path.join(os.path.dirname(script_dir), 'datasets')
 cityscapes_dir = os.path.join(datasets_dir, 'cityscapes')
 foggy_cityscapes_dir = os.path.join(datasets_dir, 'foggy_cityscapes')
-rainy_cityscapes_dir = os.path.join(datasets_dir, 'rainy_cityscapes')
+raincityscapes_dir = os.path.join(datasets_dir, 'raincityscapes')
 
 coco_annotations_dir = os.path.join(cityscapes_dir, 'annotations')
 image_root = cityscapes_dir # /leftImg8bit already in json annotations
@@ -174,26 +174,26 @@ os.makedirs(new_label_dir_val, exist_ok=True)
 
 foggy_image_dir_train = os.path.join(foggy_cityscapes_dir, "images", "train")
 foggy_image_dir_val = os.path.join(foggy_cityscapes_dir, "images", "val")
-rainy_image_dir_train = os.path.join(rainy_cityscapes_dir, "images", "train")
-rainy_image_dir_val = os.path.join(rainy_cityscapes_dir, "images", "val")
+rainy_image_dir_train = os.path.join(raincityscapes_dir, "images", "train")
+rainy_image_dir_val = os.path.join(raincityscapes_dir, "images", "val")
 
 foggy_label_dir_train = os.path.join(foggy_cityscapes_dir, "labels", "train")
 foggy_label_dir_val = os.path.join(foggy_cityscapes_dir, "labels", "val")
-rainy_label_dir_train = os.path.join(rainy_cityscapes_dir, "labels", "train")
-rainy_label_dir_val = os.path.join(rainy_cityscapes_dir, "labels", "val")
+rainy_label_dir_train = os.path.join(raincityscapes_dir, "labels", "train")
+rainy_label_dir_val = os.path.join(raincityscapes_dir, "labels", "val")
 
 foggy_cityscapes_from_coco80 = os.path.join(datasets_dir, 'foggy_cityscapes_from_coco80')
-rainy_cityscapes_from_coco80 = os.path.join(datasets_dir, 'rainy_cityscapes_from_coco80')
+raincityscapes_from_coco80 = os.path.join(datasets_dir, 'raincityscapes_from_coco80')
 
 new_foggy_image_dir_train = os.path.join(foggy_cityscapes_from_coco80, "images", "train")
 new_foggy_image_dir_val = os.path.join(foggy_cityscapes_from_coco80, "images", "val")
-new_rainy_image_dir_train = os.path.join(rainy_cityscapes_from_coco80, "images", "train")
-new_rainy_image_dir_val = os.path.join(rainy_cityscapes_from_coco80, "images", "val")
+new_rainy_image_dir_train = os.path.join(raincityscapes_from_coco80, "images", "train")
+new_rainy_image_dir_val = os.path.join(raincityscapes_from_coco80, "images", "val")
 
 new_foggy_label_dir_train = os.path.join(foggy_cityscapes_from_coco80, "labels", "train")
 new_foggy_label_dir_val = os.path.join(foggy_cityscapes_from_coco80, "labels", "val")
-new_rainy_label_dir_train = os.path.join(rainy_cityscapes_from_coco80, "labels", "train")
-new_rainy_label_dir_val = os.path.join(rainy_cityscapes_from_coco80, "labels", "val")
+new_rainy_label_dir_train = os.path.join(raincityscapes_from_coco80, "labels", "train")
+new_rainy_label_dir_val = os.path.join(raincityscapes_from_coco80, "labels", "val")
 
 os.makedirs(new_foggy_image_dir_train, exist_ok=True)
 os.makedirs(new_foggy_image_dir_val, exist_ok=True)
@@ -253,7 +253,7 @@ with open(yaml_file_path, 'w') as file:
 foggy_yaml_file_path = os.path.join(foggy_cityscapes_from_coco80, "labels", 'classes.yaml')
 with open(foggy_yaml_file_path, 'w') as file:
     yaml.dump(class_mapping_coco80, file)
-rainy_yaml_file_path = os.path.join(rainy_cityscapes_from_coco80, "labels", 'classes.yaml')
+rainy_yaml_file_path = os.path.join(raincityscapes_from_coco80, "labels", 'classes.yaml')
 with open(rainy_yaml_file_path, 'w') as file:
     yaml.dump(class_mapping_coco80, file)
 

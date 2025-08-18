@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 This script automates the process of downloading and extracting the Cityscapes dataset,
-including its variants like Foggy Cityscapes and Rainy Cityscapes. It requires a
+including its variants like Foggy Cityscapes and RainCityscapes. It requires a
 PHP session ID for authentication, which can be obtained from the browser's developer
 tools after logging into the Cityscapes website.
 
@@ -15,7 +15,7 @@ Output:
     The datasets are downloaded and extracted into the following directories:
     - datasets/cityscapes: Original Cityscapes dataset.
     - datasets/foggy_cityscapes: Foggy Cityscapes dataset.
-    - datasets/rainy_cityscapes: Rainy Cityscapes dataset.
+    - datasets/raincityscapes: RainCityscapes dataset.
 
 References:
     - https://www.cityscapes-dataset.com
@@ -70,7 +70,7 @@ if __name__ == "__main__":
     datasets_dir = os.path.join(os.path.dirname(script_dir), 'datasets')
     cityscapes_dir = os.path.join(datasets_dir, 'cityscapes')
     foggy_cityscapes_dir = os.path.join(datasets_dir, 'foggy_cityscapes')
-    rainy_cityscapes_dir = os.path.join(datasets_dir, 'rainy_cityscapes')
+    raincityscapes_dir = os.path.join(datasets_dir, 'raincityscapes')
 
     args = parser.parse_args()
     
@@ -89,9 +89,9 @@ if __name__ == "__main__":
         print(f"Downloading and unpacking {url}...")
         download_and_unpack_zip(url, args.session_id, foggy_cityscapes_dir)
 
-    # Download and unpack the rainy Cityscapes dataset
+    # Download and unpack the RainCityscapes dataset
     for url in [
         "https://www.cityscapes-dataset.com/file-handling/?packageID=33"
     ]:
         print(f"Downloading and unpacking {url}...")
-        download_and_unpack_zip(url, args.session_id, rainy_cityscapes_dir)
+        download_and_unpack_zip(url, args.session_id, raincityscapes_dir)
