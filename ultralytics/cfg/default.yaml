@@ -130,11 +130,11 @@ tracker: botsort.yaml # (str) tracker type, choices=[botsort.yaml, bytetrack.yam
 
 # MC Dropout (train, val) and Ensemble (train) settings
 dropout_method_idx: 0 # (int) dropout method index, choices=[0=DropBlock2D, 1=Dropout, 2=Dropout2d, 3=Dropout3d]
-dropout_rate: 0.1 # (float) dropout rate for the first dropout layer
-dropblock_size: 9 # (int) size of the DropBlock2D blocks
+dropout_rate: 0.03 # (float) dropout rate for the first dropout layer
+dropblock_size: 3 # (int) size of the DropBlock2D blocks
 num_mc_forward_passes: 10 # (int) number of Monte Carlo forward passes for uncertainty estimation
 num_ensemble_heads: 5 # (int) number of ensemble heads for uncertainty estimation
 
 # EDL MEH loss settings ------------------------------------------------------------------------------------------------------
-edl_weight: 1.0 #1.35 # (float) EDL MEH loss weight
+edl_weight: 1.0 # (float) EDL MEH loss weight
 meh_lambda_activation_idx: 3 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]
