@@ -1,10 +1,16 @@
-# Copy of original yaml for tuning configuration
-# KITTI dataset configuration for YOLO, mapped to the Cityscapes dataset labels
-path: ../datasets/
-train: cityscapes_from_coco80/images/train         # train images (relative to 'path')
-val: kitti_from_coco80/images/autosplit_val.txt          # val images (relative to 'path')
+# BDD100K dataset converted to YOLO format with COCO80 labels
+# Path to dataset root
+path: ../datasets/bdd100k_yolo
 
+# Train/val/test image directories (relative to path)
+train: images/train
+val: images/val
+test: images/test
 
+# Number of classes
+nc: 80
+
+# Class names (COCO80 format)
 names:
   0: person
   1: bicycle
@@ -87,3 +93,8 @@ names:
   78: hair drier
   79: toothbrush
 
+# Download script/URL (optional)
+download: |
+  # Download BDD100K dataset manually from:
+  # https://bdd-data.berkeley.edu/
+  # Then run: python dataset_gens/5_bdd100k_to_yolo.py
