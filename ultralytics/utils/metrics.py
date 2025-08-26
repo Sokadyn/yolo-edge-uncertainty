@@ -1489,10 +1489,10 @@ class MetricUncertainty(Metric):
         self.all_mue_entropy_thresholds_per_iou = [] # (1, 10)
         self.all_ue_correct_per_iou = [] # (1, 10)
         self.all_ue_incorrect_per_iou = [] # (1, 10)
-        self._max_map50_unc = None
-        self._max_map50_unc_threshold = None
-        self._max_map50_95_unc = None
-        self._max_map50_95_unc_threshold = None
+        self._max_map50 = None
+        self._max_map50_threshold = None
+        self._max_map50_95 = None
+        self._max_map50_95_threshold = None
 
     @property
     def mue50(self) -> float:
@@ -1606,48 +1606,48 @@ class MetricUncertainty(Metric):
         self.all_mue_values_per_iou, self.all_mue_entropy_thresholds_per_iou, self.all_ue_correct_per_iou, self.all_ue_incorrect_per_iou = ue_results
 
     @property
-    def max_map50_unc(self) -> float:
+    def max_map50(self) -> float:
         """
         Return the maximum mAP@0.5 over all uncertainty thresholds.
         """
-        return self._max_map50_unc if self._max_map50_unc is not None else 0.0
+        return self._max_map50 if self._max_map50 is not None else 0.0
 
-    @max_map50_unc.setter
-    def max_map50_unc(self, value: float):
-        self._max_map50_unc = value
+    @max_map50.setter
+    def max_map50(self, value: float):
+        self._max_map50 = value
 
     @property
-    def max_map50_unc_threshold(self) -> float:
+    def max_map50_threshold(self) -> float:
         """
         Return the uncertainty threshold at which maximum mAP@0.5 occurs.
         """
-        return self._max_map50_unc_threshold if self._max_map50_unc_threshold is not None else 0.0
+        return self._max_map50_threshold if self._max_map50_threshold is not None else 0.0
 
-    @max_map50_unc_threshold.setter
-    def max_map50_unc_threshold(self, value: float):
-        self._max_map50_unc_threshold = value
+    @max_map50_threshold.setter
+    def max_map50_threshold(self, value: float):
+        self._max_map50_threshold = value
 
     @property
-    def max_map50_95_unc(self) -> float:
+    def max_map50_95(self) -> float:
         """
         Return the maximum mAP@0.5-0.95 over all uncertainty thresholds.
         """
-        return self._max_map50_95_unc if self._max_map50_95_unc is not None else 0.0
+        return self._max_map50_95 if self._max_map50_95 is not None else 0.0
 
-    @max_map50_95_unc.setter
-    def max_map50_95_unc(self, value: float):
-        self._max_map50_95_unc = value
+    @max_map50_95.setter
+    def max_map50_95(self, value: float):
+        self._max_map50_95 = value
 
     @property
-    def max_map50_95_unc_threshold(self) -> float:
+    def max_map50_95_threshold(self) -> float:
         """
         Return the uncertainty threshold at which maximum mAP@0.5-0.95 occurs.
         """
-        return self._max_map50_95_unc_threshold if self._max_map50_95_unc_threshold is not None else 0.0
+        return self._max_map50_95_threshold if self._max_map50_95_threshold is not None else 0.0
 
-    @max_map50_95_unc_threshold.setter
-    def max_map50_95_unc_threshold(self, value: float):
-        self._max_map50_95_unc_threshold = value
+    @max_map50_95_threshold.setter
+    def max_map50_95_threshold(self, value: float):
+        self._max_map50_95_threshold = value
 
 
 class DetMetricsUncertainty(DetMetrics):
@@ -1656,6 +1656,29 @@ class DetMetricsUncertainty(DetMetrics):
         super().__init__(names)
         self.box = MetricUncertainty()
         self.stats["unc"] = []
+        self.nc = len(names) if names else 0
+        self._init_auroc_arrays()
+
+    def _init_auroc_arrays(self):
+        """Initialize AUROC arrays based on number of classes."""
+        self.auroc_pred = [[] for _ in range(self.nc)] if self.nc > 0 else []
+        self.auroc_true = [[] for _ in range(self.nc)] if self.nc > 0 else []
+        self.auroc_scores = np.zeros(self.nc) if self.nc > 0 else np.array([])
+        self.auroc50_scores = np.zeros(self.nc) if self.nc > 0 else np.array([])
+        self.fpr_curves = [[] for _ in range(self.nc)] if self.nc > 0 else []
+        self.tpr_curves = [[] for _ in range(self.nc)] if self.nc > 0 else []
+
+    @property
+    def names(self):
+        """Get class names."""
+        return getattr(self, '_names', {})
+
+    @names.setter
+    def names(self, value):
+        """Set class names and update AUROC arrays."""
+        self._names = value
+        self.nc = len(value) if value else 0
+        self._init_auroc_arrays()
 
     @property
     def keys(self) -> List[str]:
@@ -1667,7 +1690,11 @@ class DetMetricsUncertainty(DetMetrics):
             "metrics/mUE50_correct",
             "metrics/mUE50_incorrect",
             "metrics/mUE50-95_correct",
-            "metrics/mUE50-95_incorrect"
+            "metrics/mUE50-95_incorrect",
+            "metrics/AUROC50",
+            "metrics/AUROC50-95",
+            "metrics/max_mAP50",
+            "metrics/max_mAP50-95"
         ]
 
     def mean_results(self) -> List[float]:
@@ -1679,7 +1706,11 @@ class DetMetricsUncertainty(DetMetrics):
             self.box.mue50_correct,
             self.box.mue50_incorrect,
             self.box.mue_correct,
-            self.box.mue_incorrect
+            self.box.mue_incorrect,
+            getattr(self, '_overall_auc_50', 0.0),  # AUROC50 - use overall AUC for IoU@0.5
+            getattr(self, '_overall_auc_50_95', 0.0),  # AUROC - use overall AUC for 50-95
+            self.box.max_map50_threshold,
+            self.box.max_map50_95_threshold
         ]
 
     @property
@@ -1693,7 +1724,11 @@ class DetMetricsUncertainty(DetMetrics):
             "metrics/mUE50_correct": self.box.mue50_correct,
             "metrics/mUE50_incorrect": self.box.mue50_incorrect,
             "metrics/mUE50-95_correct": self.box.mue_correct,
-            "metrics/mUE50-95_incorrect": self.box.mue_incorrect
+            "metrics/mUE50-95_incorrect": self.box.mue_incorrect,
+            "metrics/AUROC50": getattr(self, '_overall_auc_50', 0.0),  # Use overall AUC for IoU@0.5
+            "metrics/AUROC50-95": getattr(self, '_overall_auc_50_95', 0.0),  # Use overall AUC for 50-95
+            "metrics/max_mAP50": self.box.max_map50_threshold,
+            "metrics/max_mAP50-95": self.box.max_map50_95_threshold
         })
         return results
 
@@ -1707,6 +1742,9 @@ class DetMetricsUncertainty(DetMetrics):
             return stats
         mue_results = self.calculate_uncertainty_error(stats)
         self.box.update_uncertainty(mue_results)
+        self.calculate_auroc_scores(stats)
+        if plot:
+            self.plot_roc_curve(save_dir=save_dir, names=tuple(self.names.values()) if hasattr(self, 'names') else ())
         return stats
 
     def calculate_uncertainty_error(self, stats: Dict[str, np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -1777,7 +1815,154 @@ class DetMetricsUncertainty(DetMetrics):
         self.ue_threshold = float(np.mean(ue_threshold_per_iou))
         return ue_per_iou, ue_threshold_per_iou, ue_correct_per_iou, ue_incorrect_per_iou
 
+    def calculate_auroc_scores(self, stats: Dict[str, np.ndarray], use_uncertainty: bool = True) -> None:
+        """Calculate AUROC scores for IoU@0.5 and IoU@0.5:0.95.
+        
+        Args:
+            stats: Dictionary containing tp, conf, pred_cls, and optionally unc
+            use_uncertainty: If True, use uncertainty scores instead of confidence scores
+        """
+        try:
+            from sklearn.metrics import roc_auc_score, roc_curve
+        except ImportError:
+            print("Warning: sklearn not available, AUROC scores will be 0")
+            return
+            
+        tp = stats["tp"]  # shape (N, num_iou_thresholds)
+        pred_cls = stats.get("pred_cls", np.array([]))  # shape (N,)
+        
+        # Choose between uncertainty or confidence scores
+        if use_uncertainty and "unc" in stats:
+            score = -stats["unc"]  # shape (N,) - negate uncertainty to treat lower uncertainty as higher score
+            print("Using uncertainty scores for AUROC calculation")
+        else:
+            score = stats.get("conf", np.array([]))  # shape (N,)
+            print("Using confidence scores for AUROC calculation")
+        
+        if tp.size == 0 or score.size == 0 or pred_cls.size == 0:
+            return
+            
+        # AUROC for IoU@0.5 (index 0)
+        self.auroc50_scores = self._calculate_auroc_per_iou(tp[:, 0], score, pred_cls, store_curves=True)
+        
+        # AUROC for IoU@0.5:0.95 (mean over all IoU thresholds)
+        auroc_all_iou = []
+        overall_aucs = []
+        for i in range(tp.shape[1]):
+            auroc_per_class = self._calculate_auroc_per_iou(tp[:, i], score, pred_cls)
+            auroc_all_iou.append(auroc_per_class)
+            if len(tp[:, i]) > 0 and len(np.unique(tp[:, i])) > 1:
+                try:
+                    from sklearn.metrics import roc_auc_score
+                    overall_auc_iou = roc_auc_score(tp[:, i], score)
+                    overall_aucs.append(overall_auc_iou)
+                except (ImportError, ValueError):
+                    overall_aucs.append(0.0)
+        
+        if auroc_all_iou:
+            self.auroc_scores = np.mean(auroc_all_iou, axis=0)
+        
+        # overall AUC for IoU@0.5:0.95
+        self._overall_auc_50_95 = float(np.mean(overall_aucs)) if overall_aucs else 0.0
+
+    def _calculate_auroc_per_iou(self, tp_iou: np.ndarray, score: np.ndarray, pred_cls: np.ndarray, store_curves: bool = False) -> np.ndarray:
+        """Calculate AUROC scores per class for a specific IoU threshold."""
+        try:
+            from sklearn.metrics import roc_auc_score, roc_curve
+        except ImportError:
+            return np.zeros(self.nc)
+        
+        auroc_scores = np.zeros(self.nc)
+        
+        # Calculate overall AUC treating all detections as binary (TP vs FP)
+        if store_curves and len(tp_iou) > 0 and len(np.unique(tp_iou)) > 1:
+            try:
+                self._overall_fpr, self._overall_tpr, _ = roc_curve(tp_iou, score)
+                self._overall_auc_50 = roc_auc_score(tp_iou, score)
+            except ValueError:
+                self._overall_auc_50 = 0.0
+                self._overall_fpr = np.array([0, 1])
+                self._overall_tpr = np.array([0, 1])
+        
+        for class_id in range(self.nc):
+            class_mask = pred_cls == class_id
+            if not np.any(class_mask):
+                continue
+                
+            class_tp = tp_iou[class_mask]
+            class_score = score[class_mask]
+            
+            if len(np.unique(class_tp)) < 2:
+                continue
+                
+            try:
+                auroc_scores[class_id] = roc_auc_score(class_tp, class_score)
+                if store_curves:
+                    fpr, tpr, _ = roc_curve(class_tp, class_score)
+                    self.fpr_curves[class_id] = fpr
+                    self.tpr_curves[class_id] = tpr
+            except ValueError:
+                auroc_scores[class_id] = 0.0
+                
+        return auroc_scores
+
+    def plot_roc_curve(self, save_dir: Path = Path("."), names: Tuple[str, ...] = ()) -> None:
+        """Plot ROC curve for all classes."""
+        import matplotlib.pyplot as plt
+
+        if len(self.auroc_scores) == 0:
+            return
+            
+        fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
+        
+        curves_plotted = 0
+        for class_id in range(self.nc):
+            if (class_id < len(self.fpr_curves) and 
+                class_id < len(self.tpr_curves) and 
+                len(self.fpr_curves[class_id]) > 0 and 
+                len(self.tpr_curves[class_id]) > 0):
+                
+                class_name = names[class_id] if class_id < len(names) else f'class_{class_id}'
+                auc_score = self.auroc50_scores[class_id] if class_id < len(self.auroc50_scores) else 0
+                
+                if curves_plotted < 20:
+                    ax.plot(self.fpr_curves[class_id], self.tpr_curves[class_id], 
+                           linewidth=1, label=f'{class_name} (AUC={auc_score:.3f})')
+                else:
+                    ax.plot(self.fpr_curves[class_id], self.tpr_curves[class_id], 
+                           linewidth=1, color='grey', alpha=0.5)
+                curves_plotted += 1
+        
+        # Add overall (micro averaged) curve treating all detections as binary classification (TP vs FP)
+        if curves_plotted > 1 and hasattr(self, '_overall_fpr') and hasattr(self, '_overall_tpr'):
+            ax.plot(self._overall_fpr, self._overall_tpr, linewidth=3, color='red', alpha=0.7, 
+                   label=f'All classes (AUC={self._overall_auc_50:.3f})')
+        
+        ax.plot([0, 1], [0, 1], linestyle='--', color='black', linewidth=1, label='Random (AUC=0.50)') # random line as reference
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        
+        ax.set_title(f'ROC Curves (IoU@0.5, {curves_plotted} classes)')
+        
+        if curves_plotted <= 20:
+            ax.legend(bbox_to_anchor=(1.04, 1), loc='upper left')
+        
+        plt.tight_layout()
+        
+        if save_dir:
+            save_path = save_dir / 'roc_curve.png'
+            fig.savefig(save_path, dpi=250, bbox_inches='tight')
+            print(f"ROC curve saved to {save_path}")
+        plt.close(fig)
+
     def clear_stats(self):
         """Clear the stored statistics."""
         for v in self.stats.values():
             v.clear()
+        self.auroc_pred = [[] for _ in range(self.nc)] if self.nc > 0 else []
+        self.auroc_true = [[] for _ in range(self.nc)] if self.nc > 0 else []
+        self.fpr_curves = [[] for _ in range(self.nc)] if self.nc > 0 else []
+        self.tpr_curves = [[] for _ in range(self.nc)] if self.nc > 0 else []
+
