@@ -82,10 +82,10 @@ class DetectionValidatorUncertainty(DetectionValidator):
 
     def get_desc(self) -> str:
         """Return a formatted string summarizing class metrics of YOLO model."""
-        return ("%22s" + "%11s" * 18) % (
+        return ("%22s" + "%11s" * 2 + "%11s" * 16) % (
             "Class", "Images", "Instances", "Box(P", "R", "mAP50", "mAP50-95", "mUE50", "mUE50_t", "mUE50-95", "mUE50-95_t",
-            "mUE50_c", "mUE50_i", "mUE50-95_c", "mUE50-95_i", "AUROC50", "AUROC50-95", 
-            "max_mAP50", "max_mAP50-95"
+            "mUE50_c", "mUE50_i", "mUE50-95_c", "mUE50-95_i", "FPR95_50", "FPR95_50-95", 
+            "AUROC50", "AUROC50-95"
         )
 
     def postprocess(self, preds: torch.Tensor) -> List[Dict[str, torch.Tensor]]:

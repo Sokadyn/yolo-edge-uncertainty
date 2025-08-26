@@ -1489,10 +1489,6 @@ class MetricUncertainty(Metric):
         self.all_mue_entropy_thresholds_per_iou = [] # (1, 10)
         self.all_ue_correct_per_iou = [] # (1, 10)
         self.all_ue_incorrect_per_iou = [] # (1, 10)
-        self._max_map50 = None
-        self._max_map50_threshold = None
-        self._max_map50_95 = None
-        self._max_map50_95_threshold = None
 
     @property
     def mue50(self) -> float:
@@ -1605,49 +1601,6 @@ class MetricUncertainty(Metric):
         """
         self.all_mue_values_per_iou, self.all_mue_entropy_thresholds_per_iou, self.all_ue_correct_per_iou, self.all_ue_incorrect_per_iou = ue_results
 
-    @property
-    def max_map50(self) -> float:
-        """
-        Return the maximum mAP@0.5 over all uncertainty thresholds.
-        """
-        return self._max_map50 if self._max_map50 is not None else 0.0
-
-    @max_map50.setter
-    def max_map50(self, value: float):
-        self._max_map50 = value
-
-    @property
-    def max_map50_threshold(self) -> float:
-        """
-        Return the uncertainty threshold at which maximum mAP@0.5 occurs.
-        """
-        return self._max_map50_threshold if self._max_map50_threshold is not None else 0.0
-
-    @max_map50_threshold.setter
-    def max_map50_threshold(self, value: float):
-        self._max_map50_threshold = value
-
-    @property
-    def max_map50_95(self) -> float:
-        """
-        Return the maximum mAP@0.5-0.95 over all uncertainty thresholds.
-        """
-        return self._max_map50_95 if self._max_map50_95 is not None else 0.0
-
-    @max_map50_95.setter
-    def max_map50_95(self, value: float):
-        self._max_map50_95 = value
-
-    @property
-    def max_map50_95_threshold(self) -> float:
-        """
-        Return the uncertainty threshold at which maximum mAP@0.5-0.95 occurs.
-        """
-        return self._max_map50_95_threshold if self._max_map50_95_threshold is not None else 0.0
-
-    @max_map50_95_threshold.setter
-    def max_map50_95_threshold(self, value: float):
-        self._max_map50_95_threshold = value
 
 
 class DetMetricsUncertainty(DetMetrics):
@@ -1691,10 +1644,10 @@ class DetMetricsUncertainty(DetMetrics):
             "metrics/mUE50_incorrect",
             "metrics/mUE50-95_correct",
             "metrics/mUE50-95_incorrect",
+            "metrics/FPR95_50",
+            "metrics/FPR95_50-95",
             "metrics/AUROC50",
-            "metrics/AUROC50-95",
-            "metrics/max_mAP50",
-            "metrics/max_mAP50-95"
+            "metrics/AUROC50-95"
         ]
 
     def mean_results(self) -> List[float]:
@@ -1707,10 +1660,10 @@ class DetMetricsUncertainty(DetMetrics):
             self.box.mue50_incorrect,
             self.box.mue_correct,
             self.box.mue_incorrect,
-            getattr(self, '_overall_auc_50', 0.0),  # AUROC50 - use overall AUC for IoU@0.5
-            getattr(self, '_overall_auc_50_95', 0.0),  # AUROC - use overall AUC for 50-95
-            self.box.max_map50_threshold,
-            self.box.max_map50_95_threshold
+            getattr(self, '_overall_fpr95_50', 1.0),  # FPR at 95% recall for IoU@0.5
+            getattr(self, '_overall_fpr95_50_95', 1.0),  # FPR at 95% recall for IoU@0.5:0.95
+            getattr(self, '_overall_auroc_50', 0.0),  # overall AUROC for IoU@0.5
+            getattr(self, '_overall_auroc_50_95', 0.0)  # overall AUROC for 50-95
         ]
 
     @property
@@ -1725,10 +1678,10 @@ class DetMetricsUncertainty(DetMetrics):
             "metrics/mUE50_incorrect": self.box.mue50_incorrect,
             "metrics/mUE50-95_correct": self.box.mue_correct,
             "metrics/mUE50-95_incorrect": self.box.mue_incorrect,
-            "metrics/AUROC50": getattr(self, '_overall_auc_50', 0.0),  # Use overall AUC for IoU@0.5
-            "metrics/AUROC50-95": getattr(self, '_overall_auc_50_95', 0.0),  # Use overall AUC for 50-95
-            "metrics/max_mAP50": self.box.max_map50_threshold,
-            "metrics/max_mAP50-95": self.box.max_map50_95_threshold
+            "metrics/FPR95_50": getattr(self, '_overall_fpr95_50', 1.0),  # FPR at 95% recall for IoU@0.5
+            "metrics/FPR95_50-95": getattr(self, '_overall_fpr95_50_95', 1.0),  # FPR at 95% recall for IoU@0.5:0.95
+            "metrics/AUROC50": getattr(self, '_overall_auroc_50', 0.0),  # Use overall AUROC for IoU@0.5
+            "metrics/AUROC50-95": getattr(self, '_overall_auroc_50_95', 0.0)  # Use overall AUROC for 50-95
         })
         return results
 
@@ -1834,10 +1787,8 @@ class DetMetricsUncertainty(DetMetrics):
         # Choose between uncertainty or confidence scores
         if use_uncertainty and "unc" in stats:
             score = -stats["unc"]  # shape (N,) - negate uncertainty to treat lower uncertainty as higher score
-            print("Using uncertainty scores for AUROC calculation")
         else:
             score = stats.get("conf", np.array([]))  # shape (N,)
-            print("Using confidence scores for AUROC calculation")
         
         if tp.size == 0 or score.size == 0 or pred_cls.size == 0:
             return
@@ -1847,23 +1798,30 @@ class DetMetricsUncertainty(DetMetrics):
         
         # AUROC for IoU@0.5:0.95 (mean over all IoU thresholds)
         auroc_all_iou = []
-        overall_aucs = []
+        overall_aurocs = []
+        overall_fpr95s = []
         for i in range(tp.shape[1]):
             auroc_per_class = self._calculate_auroc_per_iou(tp[:, i], score, pred_cls)
             auroc_all_iou.append(auroc_per_class)
             if len(tp[:, i]) > 0 and len(np.unique(tp[:, i])) > 1:
                 try:
-                    from sklearn.metrics import roc_auc_score
-                    overall_auc_iou = roc_auc_score(tp[:, i], score)
-                    overall_aucs.append(overall_auc_iou)
+                    from sklearn.metrics import roc_auc_score, roc_curve
+                    overall_auroc_iou = roc_auc_score(tp[:, i], score)
+                    overall_aurocs.append(overall_auroc_iou)
+                    # Calculate FPR95 for this IoU threshold
+                    fpr_iou, tpr_iou, _ = roc_curve(tp[:, i], score)
+                    fpr95_iou = self._calculate_fpr95(fpr_iou, tpr_iou)
+                    overall_fpr95s.append(fpr95_iou)
                 except (ImportError, ValueError):
-                    overall_aucs.append(0.0)
+                    overall_aurocs.append(0.0)
+                    overall_fpr95s.append(1.0)
         
         if auroc_all_iou:
             self.auroc_scores = np.mean(auroc_all_iou, axis=0)
         
-        # overall AUC for IoU@0.5:0.95
-        self._overall_auc_50_95 = float(np.mean(overall_aucs)) if overall_aucs else 0.0
+        # Overall metrics for IoU@0.5:0.95
+        self._overall_auroc_50_95 = float(np.mean(overall_aurocs)) if overall_aurocs else 0.0
+        self._overall_fpr95_50_95 = float(np.mean(overall_fpr95s)) if overall_fpr95s else 1.0
 
     def _calculate_auroc_per_iou(self, tp_iou: np.ndarray, score: np.ndarray, pred_cls: np.ndarray, store_curves: bool = False) -> np.ndarray:
         """Calculate AUROC scores per class for a specific IoU threshold."""
@@ -1878,9 +1836,12 @@ class DetMetricsUncertainty(DetMetrics):
         if store_curves and len(tp_iou) > 0 and len(np.unique(tp_iou)) > 1:
             try:
                 self._overall_fpr, self._overall_tpr, _ = roc_curve(tp_iou, score)
-                self._overall_auc_50 = roc_auc_score(tp_iou, score)
+                self._overall_auroc_50 = roc_auc_score(tp_iou, score)
+                # Calculate FPR95 (False Positive Rate at 95% recall/TPR)
+                self._overall_fpr95_50 = self._calculate_fpr95(self._overall_fpr, self._overall_tpr)
             except ValueError:
-                self._overall_auc_50 = 0.0
+                self._overall_auroc_50 = 0.0
+                self._overall_fpr95_50 = 1.0  # Worst case FPR
                 self._overall_fpr = np.array([0, 1])
                 self._overall_tpr = np.array([0, 1])
         
@@ -1905,6 +1866,19 @@ class DetMetricsUncertainty(DetMetrics):
                 auroc_scores[class_id] = 0.0
                 
         return auroc_scores
+
+    def _calculate_fpr95(self, fpr: np.ndarray, tpr: np.ndarray) -> float:
+        """Calculate False Positive Rate at 95% True Positive Rate (recall)."""
+        if len(fpr) == 0 or len(tpr) == 0:
+            return 1.0  # Worst case
+        
+        # Find the point where TPR >= 0.95
+        idx_95 = np.where(tpr >= 0.95)[0]
+        if len(idx_95) == 0:
+            return 1.0  # If we never reach 95% recall, return worst case
+        
+        # Take the first point where TPR >= 0.95 (lowest FPR at 95% recall)
+        return float(fpr[idx_95[0]])
 
     def plot_roc_curve(self, save_dir: Path = Path("."), names: Tuple[str, ...] = ()) -> None:
         """Plot ROC curve for all classes."""
@@ -1936,7 +1910,7 @@ class DetMetricsUncertainty(DetMetrics):
         # Add overall (micro averaged) curve treating all detections as binary classification (TP vs FP)
         if curves_plotted > 1 and hasattr(self, '_overall_fpr') and hasattr(self, '_overall_tpr'):
             ax.plot(self._overall_fpr, self._overall_tpr, linewidth=3, color='red', alpha=0.7, 
-                   label=f'All classes (AUC={self._overall_auc_50:.3f})')
+                   label=f'All classes (AUC={self._overall_auroc_50:.3f})')
         
         ax.plot([0, 1], [0, 1], linestyle='--', color='black', linewidth=1, label='Random (AUC=0.50)') # random line as reference
         ax.set_xlabel('False Positive Rate')
@@ -1954,7 +1928,6 @@ class DetMetricsUncertainty(DetMetrics):
         if save_dir:
             save_path = save_dir / 'roc_curve.png'
             fig.savefig(save_path, dpi=250, bbox_inches='tight')
-            print(f"ROC curve saved to {save_path}")
         plt.close(fig)
 
     def clear_stats(self):
