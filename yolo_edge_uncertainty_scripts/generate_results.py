@@ -19,11 +19,11 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 normal_repr = torch.Tensor.__repr__
 torch.Tensor.__repr__ = lambda self: f"{self.shape}_{normal_repr(self)}"
 
-epochs = 25
+epochs = 50
 fraction = 1.0
 device = '0'
 imgsz = 320 * 2
-training = False # only run validation and load pretrained models
+training = True # only run validation and load pretrained models
 val_during_training = False # validation after each epoch during training for extended results
 
 models = {
@@ -54,7 +54,7 @@ def update_results_csv(results, path, name):
 
 for name, model in models.items():
 
-    train_dataset = 'cityscapes-train-kitti-val-from-coco80.yaml'
+    train_dataset = 'kitti-from-coco80.yaml'
     train_dataset_name = os.path.splitext(os.path.basename(train_dataset))[0]
     print(f"Training model {name} on {train_dataset_name}")
     train_folder_name = f"{folder_name}/train-{train_dataset_name}/yolo_{name}"
@@ -74,12 +74,12 @@ for name, model in models.items():
         else:
             model.load(os.path.join(train_folder_name, 'weights', 'best.pt'))
 
-    for val_dataset in ['cityscapes-from-coco80.yaml', 'foggy-cityscapes-from-coco80.yaml', 'raincityscapes-from-coco80.yaml', 'kitti-from-coco80.yaml']:
+    for val_dataset in ['cityscapes-from-coco80.yaml', 'foggy-cityscapes-from-coco80.yaml', 'raincityscapes-from-coco80.yaml', 'kitti-from-coco80.yaml', 'bdd100k-coco80.yaml', 'nuimages-coco80.yaml']:
         val_dataset_name = os.path.splitext(os.path.basename(val_dataset))[0]
         print(f"Validating model {name} on {val_dataset_name}")
         val_folder_name = train_folder_name.replace(f'train-{train_dataset_name}', f"val-{val_dataset_name}")
         if os.path.exists(val_folder_name):
             shutil.rmtree(val_folder_name)
-        val_results = model.val(data=val_dataset, imgsz=imgsz, name=val_folder_name, exist_ok=True, device=device, fraction=fraction, rect=True)
+        val_results = model.val(data=val_dataset, imgsz=imgsz, name=val_folder_name, exist_ok=True, device=device, rect=True)
         df_val = update_results_csv(val_results, val_folder_name, name)
         display(df_val)

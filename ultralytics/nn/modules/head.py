@@ -17,7 +17,6 @@ from .block import DFL, SAVPE, BNContrastiveHead, ContrastiveHead, Proto, Residu
 from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
-from torch.distributions import Dirichlet
 from ultralytics.utils.ops import calc_cls_sigmoid_single_sample_uncertainty, calc_cls_softmax_single_sample_uncertainty, calc_cls_sigmoid_multi_sample_uncertainty, calc_cls_softmax_multi_sample_uncertainty
 from ultralytics.nn.modules.activation import AGLU
 
@@ -1680,7 +1679,7 @@ class DetectEDLMEH(Detect):
     YOLO Detect head with Evidential Deep Learning (EDL) and Model Evidence Head (MEH).
     
     This class implements EDL with MEH according to Park et al. 2023 for uncertainty estimation.
-    It uses a Dirichlet distribution to model uncertainty through evidence parameters.
+    It uses K/S (concentration over strength) to model uncertainty through evidence parameters.
     
     Paper Reference:
         Park, Younghyun, et al. "Active learning for object detection with evidential deep learning 
@@ -1771,7 +1770,7 @@ class DetectEDLMEH(Detect):
     
     def _inference(self, x):
         """
-        Perform inference with EDL MEH to compute uncertainty using Dirichlet distribution.
+        Perform inference with EDL MEH to compute uncertainty using K/S (concentration over strength).
         
         Args:
             x (List[torch.Tensor]): Input feature maps with evidence parameters.
@@ -1790,15 +1789,15 @@ class DetectEDLMEH(Detect):
             meh_lambda = x_cat[:, -1:]
         else:
             box, cls, meh_lambda = x_cat.split((self.reg_max * 4, self.nc, 1), 1)
-        cls_t = cls.transpose(-1, -2)
+        cls_t = cls.transpose(-1, -2) # [batch, detectors, classes]
         cls_t[cls_t.isnan()] = 0.0
         meh_lambda_t = meh_lambda.transpose(-1, -2)
         meh_lambda_t[meh_lambda_t.isnan()] = 0.0
-        alphas = meh_lambda_t * cls_t.sigmoid()
+        alphas = meh_lambda_t * cls_t.sigmoid() # [batch, detectors, classes]
         alphas = torch.clamp(alphas, min=1e-6)
-        dirichlet_dist = Dirichlet(alphas)
-        samples = dirichlet_dist.sample(torch.tensor([50]))
-        uncertainty = calc_cls_softmax_multi_sample_uncertainty(samples).transpose(-1, -2)
+        # Calculate uncertainty as K/S (concentration over strength)
+        S = alphas.sum(dim=-1, keepdim=True)  # Dirichlet strength, faster than Dirichlet(S) sampling, but not full unertainty picture
+        uncertainty = (self.nc / S).transpose(-1, -2)  # K/S uncertainty, shape: [batch, 1, 8400]
         if self.export and self.format in {"tflite", "edgetpu"}:
             grid_h = shape[2]
             grid_w = shape[3]
