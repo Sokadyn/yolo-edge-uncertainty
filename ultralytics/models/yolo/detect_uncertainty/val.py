@@ -14,7 +14,6 @@ from ultralytics.utils.checks import check_requirements
 from ultralytics.utils.metrics import ConfusionMatrix, box_iou, DetMetricsUncertainty
 from ultralytics.utils.plotting import plot_images_with_uncertainty
 from ultralytics.models.yolo.detect import DetectionValidator
-from ultralytics.nn.modules.head import initialize_uncertainty_layers
 
 
 class DetectionValidatorUncertainty(DetectionValidator):
@@ -34,10 +33,13 @@ class DetectionValidatorUncertainty(DetectionValidator):
         """
         super().__init__(dataloader, save_dir, args, _callbacks)
         self.metrics = DetMetricsUncertainty()
+        # For histogram
         self.uncertainty_bins = np.zeros(100)
+        self.uncertainty_bins_before_nms = np.zeros(100)
         self.bin_edges = np.linspace(0, 10, 101)
-        if hasattr(self, 'model') and self.model is not None:
-            initialize_uncertainty_layers(self.model, self.args)
+        # For scatter plots
+        self.conf_unc_before_nms = []
+        self.conf_unc_after_nms = []
 
     def preprocess(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -99,6 +101,22 @@ class DetectionValidatorUncertainty(DetectionValidator):
             (List[Dict[str, torch.Tensor]]): Processed predictions after NMS, where each dict contains
                 'bboxes', 'conf', 'cls', and 'unc' tensors.
         """
+        # uncertainties and confidences before NMS
+        bs = preds[0].shape[0]
+        nc = preds[0].shape[1] - 5  # number of classes (total channels - 4 bbox - 1 unc)
+        
+        for b in range(bs):
+            class_confidences = preds[0][b, 4:4+nc, :]  # Shape: (nc, N)
+            max_conf_values = class_confidences.max(dim=0)[0]
+            conf_mask = max_conf_values > self.args.conf
+            if conf_mask.any():
+                unc_values_before_nms = preds[0][b, -1, conf_mask].cpu().numpy()
+                conf_values_before_nms = max_conf_values[conf_mask].cpu().numpy()
+                self.conf_unc_before_nms.extend(list(zip(conf_values_before_nms, unc_values_before_nms)))
+                bin_indices = np.digitize(unc_values_before_nms, self.bin_edges[:-1])
+                valid_indices = (bin_indices > 0) & (bin_indices <= len(self.uncertainty_bins_before_nms))
+                np.add.at(self.uncertainty_bins_before_nms, bin_indices[valid_indices] - 1, 1)
+        
         outputs = ops.non_max_suppression(
             preds,
             self.args.conf,
@@ -113,31 +131,78 @@ class DetectionValidatorUncertainty(DetectionValidator):
         
         results = [{"bboxes": x[:, :4], "conf": x[:, 4], "cls": x[:, 5], "unc": x[:, 6]} for x in outputs]
 
+        # uncertainties and confidences after NMS
         for x in results:
             if x["unc"].numel() > 0:
                 unc_values = x["unc"].cpu().numpy()
+                conf_values = x["conf"].cpu().numpy()
+                self.conf_unc_after_nms.extend(list(zip(conf_values, unc_values)))
                 bin_indices = np.digitize(unc_values, self.bin_edges[:-1])
                 valid_indices = (bin_indices > 0) & (bin_indices <= len(self.uncertainty_bins))
                 np.add.at(self.uncertainty_bins, bin_indices[valid_indices] - 1, 1)
 
         return results
 
-    def plot_final_histogram(self):
+    def plot_uncertainty_histogram(self):
         """Plot and save the histogram of accumulated uncertainty values."""
-        plt.figure()
-
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        
         bin_width = self.bin_edges[1] - self.bin_edges[0]
-        plt.bar(self.bin_edges[:-1], self.uncertainty_bins, width=bin_width, color='blue', alpha=0.7, align='edge')
+        
+        # before NMS
+        ax1.bar(self.bin_edges[:-1], self.uncertainty_bins_before_nms, width=bin_width, color='red', alpha=0.7, align='edge')
+        ax1.set_title('Uncertainty Histogram Before NMS')
+        ax1.set_xlabel('Uncertainty Values')
+        ax1.set_ylabel('Frequency')
+        ax1.set_xlim(self.bin_edges[0], self.bin_edges[-1])
+        ax1.grid(True)
+        
+        # after NMS
+        ax2.bar(self.bin_edges[:-1], self.uncertainty_bins, width=bin_width, color='blue', alpha=0.7, align='edge')
+        ax2.set_title('Uncertainty Histogram After NMS')
+        ax2.set_xlabel('Uncertainty Values')
+        ax2.set_ylabel('Frequency')
+        ax2.set_xlim(self.bin_edges[0], self.bin_edges[-1])
+        ax2.grid(True)
 
-        head_name = self.args.model.replace('.pt', '').replace('.yaml', '') if hasattr(self.args, 'model') else 'UnknownHead'
-        plt.title('Final Histogram of Uncertainty Values')
-        plt.xlabel('Uncertainty Bins')
-        plt.ylabel('Frequency')
-        plt.xlim(self.bin_edges[0], self.bin_edges[-1])
-        plt.grid(True)
         plt.tight_layout()
-
         plt.savefig(str(self.save_dir / "uncertainty_histogram.png"))
+        plt.close()
+        
+        
+    def plot_conf_unc_scatter(self):
+        """Plot confidence vs uncertainty scatter plots for before and after NMS."""
+        if not self.conf_unc_before_nms and not self.conf_unc_after_nms:
+            return
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        
+        # before NMS
+        if self.conf_unc_before_nms:
+            conf_before, unc_before = zip(*self.conf_unc_before_nms)
+            ax1.scatter(conf_before, unc_before, alpha=0.5, s=1, c='red')
+            ax1.set_xlabel('Confidence')
+            ax1.set_ylabel('Uncertainty')
+            ax1.set_title('Confidence vs Uncertainty (Before NMS)')
+            ax1.grid(True, alpha=0.3)
+            correlation = np.corrcoef(conf_before, unc_before)[0, 1]
+            ax1.text(0.05, 0.95, f'Correlation: {correlation:.3f}', 
+                    transform=ax1.transAxes, bbox=dict(boxstyle='round', facecolor='wheat'))
+        
+        # after NMS
+        if self.conf_unc_after_nms:
+            conf_after, unc_after = zip(*self.conf_unc_after_nms)
+            ax2.scatter(conf_after, unc_after, alpha=0.5, s=1, c='blue')
+            ax2.set_xlabel('Confidence')
+            ax2.set_ylabel('Uncertainty')
+            ax2.set_title('Confidence vs Uncertainty (After NMS)')
+            ax2.grid(True, alpha=0.3)
+            correlation = np.corrcoef(conf_after, unc_after)[0, 1]
+            ax2.text(0.05, 0.95, f'Correlation: {correlation:.3f}', 
+                    transform=ax2.transAxes, bbox=dict(boxstyle='round', facecolor='wheat'))
+        
+        plt.tight_layout()
+        plt.savefig(str(self.save_dir / "conf_vs_uncertainty_scatter.png"))
         plt.close()
 
 
@@ -211,7 +276,8 @@ class DetectionValidatorUncertainty(DetectionValidator):
         if self.args.plots:
             for normalize in True, False:
                 self.confusion_matrix.plot(save_dir=self.save_dir, normalize=normalize, on_plot=self.on_plot)
-                self.plot_final_histogram()
+            self.plot_uncertainty_histogram()
+            self.plot_conf_unc_scatter()
         self.metrics.speed = self.speed
         self.metrics.confusion_matrix = self.confusion_matrix
 

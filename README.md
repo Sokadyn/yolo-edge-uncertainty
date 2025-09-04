@@ -36,8 +36,8 @@ Work is currently in progress, and the framework is an experimental state, not r
 ## Experiments
 To run experiments:
 - Prepare the datasets (cityscapes, foggy-cityscpapes, raincityscapes and kitti) with scripts in `dataset_gens` (0-3)
-- Run `yolo_edge_uncertainty_scripts/interim_results.py`
-- Check results with `yolo_edge_uncertainty_scripts/interim_results_analysis.ipynb`
+- Run `yolo_edge_uncertainty_scripts/generate_results.py`
+- Check results with `yolo_edge_uncertainty_scripts/analyse_results.ipynb`
 
 Metrics and experimental setup will still be further refined in the future.
 

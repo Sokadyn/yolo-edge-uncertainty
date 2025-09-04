@@ -1,313 +1,317 @@
-import os
-import sys
-
+from pathlib import Path
 import pandas as pd
-from matplotlib import pyplot as plt
 import numpy as np
-from IPython.display import display
+import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+from dataclasses import dataclass
+from typing import Callable, Optional
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-script_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Font settings
 FONT_SMALL = 16
 FONT_MEDIUM = 18
 FONT_LARGE = 20
+plt.rcParams.update({
+    'font.size': FONT_LARGE,
+    'axes.labelsize': FONT_MEDIUM,
+    'xtick.labelsize': FONT_SMALL,
+    'ytick.labelsize': FONT_SMALL,
+    'legend.fontsize': FONT_SMALL,
+    'figure.titlesize': FONT_MEDIUM,
+    'axes.titlesize': FONT_MEDIUM,
+    'figure.figsize': (16, 8),
+})
 
-plt.rcParams['font.size'] = FONT_LARGE
-plt.rcParams['axes.labelsize'] = FONT_MEDIUM
-plt.rcParams['xtick.labelsize'] = FONT_SMALL
-plt.rcParams['ytick.labelsize'] = FONT_SMALL
-plt.rcParams['legend.fontsize'] = FONT_SMALL
-plt.rcParams['figure.titlesize'] = FONT_MEDIUM
-plt.rcParams['axes.titlesize'] = FONT_MEDIUM
-plt.rcParams['figure.figsize'] = (16, 8)
+MODEL_ORDER_PRETTY = [
+    'Base Pretrained', 'Base Confidence', 'Base Uncertainty',
+    'Ensemble', 'MC Dropout', 'EDL MEH'
+]
 
+def order_models(idx_like):
+    """Return models in fixed order, dropping any missing."""
+    present = set(idx_like)
+    return [m for m in MODEL_ORDER_PRETTY if m in present]
 
-def load_results_data():
-    order = ["base-pretrained", "base-confidence", "base-uncertainty", "ensemble", "mc-dropout", "edl-meh"]
-    
-    path_base = os.path.join(script_dir, '..', 'interim_results', 'detect')
-    newest_results = 'data_splits_and_models'
-    print(f'Results folder: {newest_results}')
-    
-    datasets = {}
-    train_dataset_path = [f for f in os.listdir(f'{path_base}/{newest_results}') 
-                          if f.startswith('train') and os.path.isdir(f'{path_base}/{newest_results}/{f}')][0]
-    print(f'Train dataset path: {train_dataset_path}')
-    
-    for dataset_type in ['val']:
-        dataset_paths = [f for f in os.listdir(f'{path_base}/{newest_results}') 
-                        if f.startswith(dataset_type) and os.path.isdir(f'{path_base}/{newest_results}/{f}')]
-        
-        for dataset_path in dataset_paths:
-            full_dataset_path = f'{path_base}/{newest_results}/{dataset_path}'
-            df_results = pd.DataFrame()
-            
-            for model_folder in [f for f in os.listdir(full_dataset_path) 
-                                if os.path.isdir(f'{full_dataset_path}/{f}')]:
-                df_results_model = pd.read_csv(f'{full_dataset_path}/{model_folder}/results_extended.csv')
-                
-                if df_results.empty:
-                    df_results = df_results_model
-                else:
-                    df_results = pd.concat([df_results, df_results_model])
-            
-            df_results.set_index('name', inplace=True)
-            df_results = df_results.loc[order, :]
-            
-            print(f'Processing dataset: {dataset_path}')
-            display(df_results)
-            
-            speed_cols = [col for col in df_results.columns if 'speed' in col]
-            df_results['speed_total'] = df_results[speed_cols].sum(axis=1)
-            
-            datasets[dataset_path] = df_results
-    
-    return datasets, train_dataset_path
+VAL_ORDER_RAW = [
+    'cityscapes-from-coco80', 'foggy-cityscapes-from-coco80',
+    'raincityscapes-from-coco80', 'kitti-from-coco80',
+    'bdd100k-coco80', 'nuimages-coco80'
+]
+def order_vals(vals):
+    vals = list(vals)
+    ordered = [v for v in VAL_ORDER_RAW if v in vals]
+    tail = [v for v in vals if v not in VAL_ORDER_RAW]
+    return ordered + tail
 
+MODEL_ORDER_RAW = ["base-pretrained", "base-confidence", "base-uncertainty",
+                   "ensemble", "mc-dropout", "edl-meh"]
+MODEL_RENAME = {
+    'base-pretrained': 'Base Pretrained',
+    'base-confidence': 'Base Confidence',
+    'base-uncertainty': 'Base Uncertainty',
+    'ensemble': 'Ensemble',
+    'mc-dropout': 'MC Dropout',
+    'edl-meh': 'EDL MEH',
+}
 
-def format_model_names(datasets):
-    names_title_case = ['Base Pretrained', 'Base Confidence', 'Base Uncertainty', 
-                       'Ensemble', 'MC Dropout', 'EDL MEH']
-    
-    rename_dict_index = {
-        'base-pretrained': 'Base Pretrained',
-        'base-confidence': 'Base Confidence', 
-        'base-uncertainty': 'Base Uncertainty',
-        'ensemble': 'Ensemble',
-        'mc-dropout': 'MC Dropout',
-        'edl-meh': 'EDL MEH'
-    }
-    
-    for df in datasets.values():
-        df.rename(index=rename_dict_index, inplace=True)
-    
-    return datasets, names_title_case
+@dataclass
+class MetricCfg:
+    column: str
+    ylabel: str
+    ylim: tuple
+    higher_better: bool
+    transform: Optional[Callable[[pd.Series], pd.Series]] = None
 
+METRICS = {
+    'mAP50': MetricCfg('metrics/mAP50(B)', 'mAP50 →', (0, 0.55), True),
+    'Precision': MetricCfg('metrics/precision(B)', 'Precision →', (0, 1.0), True),
+    'Recall': MetricCfg('metrics/recall(B)', 'Recall →', (0, 0.55), True),
+    'FPS': MetricCfg('speed_total', 'FPS (@A100) →', (0, None), True, transform=lambda s: 1000.0 / s),  # ms → FPS
+    'mUE50': MetricCfg('metrics/mUE50', '← mUE', (0, 0.55), False),
+    'AUROC50': MetricCfg('metrics/AUROC50', 'AUROC →', (0.5, 1.0), True),
+    'FPR95_50': MetricCfg('metrics/FPR95_50', '← FPR95', (0, 1.0), False),
+    'E-AURC50': MetricCfg('metrics/E-AURC50', '← E-AURC', (0, 0.12), False),
+}
 
-def create_dual_barplots(datasets, train_dataset_path):
-    metric1 = 'metrics/mAP50(B)'
-    metric2 = 'metrics/mUE50'
-    
-    fig, axs = plt.subplots(2, 2, figsize=(16, 12))
-    axs = axs.flatten()
-    
-    for idx, (key, df) in enumerate(datasets.items()):
-        if idx >= 4:
-            break
-        ax1 = axs[idx]
-        
-        color_1 = 'royalblue'
-        ax1.set_xlabel('Model Name')
-        ax1.set_ylabel('mAP50', color=color_1)
-        ax1.bar(df.index, df[metric1], color=color_1, width=0.4, label=metric1)
-        ax1.tick_params(axis='y', labelcolor=color_1)
-        
-        ax2 = ax1.twinx()
-        color_2 = 'orangered'
-        ax2.set_ylabel('mUE50', color=color_2)
-        ax2.bar([i + 0.4 for i in range(len(df.index))], df[metric2], color=color_2, width=0.4, label=metric2)
-        ax2.tick_params(axis='y', labelcolor=color_2)
-        
-        ax1.set_xticks([i + 0.2 for i in range(len(df.index))])
-        ax1.set_xticklabels(df.index, rotation=45, ha='right')
-        ax1.set_title(f"{key.replace('val-', '').replace('-from-coco80', '').replace('-coco80', '').replace('-', ' ').title().replace('Raincityscapes', 'RainCityscapes')} Validation")
-        
-        ax1.set_ylim(0, 0.6)
-        ax2.set_ylim(0, 0.6)
-    
-    fig.tight_layout()
-    fig.suptitle(f"Results for YOLO11n-based Models trained on {train_dataset_path.split('train')[1].replace('-from-coco80', '').replace('-coco80', '').replace('-', '').title()} Dataset", fontsize=FONT_LARGE)
-    plt.subplots_adjust(top=0.92)
-    plt.show()
+def format_dataset_name(name):
+    return (name.replace('-from-coco80', '')
+                .replace('-coco80', '')
+                .replace('-', ' ')
+                .title()
+                .replace('Raincityscapes', 'RainCityscapes'))
 
+def _sum_speed_cols(df):
+    speed_cols = [c for c in df.columns if 'speed' in c if not 'loss' in c] # inference speed only
+    return df[speed_cols].sum(axis=1) if speed_cols else pd.Series([np.nan]*len(df), index=df.index)
 
-def create_extended_barplots(datasets, train_dataset_path):
+def load_all_results(results_root):
+    """
+    returns a tidy df with MultiIndex (train,val,model) and result columns,
+    including computed 'speed_total'.
+    """
+    rows = []
+    for train_dir in sorted([p for p in results_root.iterdir() if p.is_dir() and p.name.startswith('train-')]):
+        train = train_dir.name.replace('train-', '')
+        for val_dir in sorted([p for p in train_dir.iterdir() if p.is_dir() and p.name.startswith('val-')]):
+            val = val_dir.name.replace('val-', '')
+            for model_dir in sorted([p for p in val_dir.iterdir() if p.is_dir()]):
+                csv_path = model_dir / 'results_extended.csv'
+                if not csv_path.exists():
+                    continue
+                df = pd.read_csv(csv_path)
+                if 'name' not in df.columns:
+                    continue
+                df = df.set_index('name')
+                available = [m for m in MODEL_ORDER_RAW if m in df.index]
+                if not available:
+                    continue
+                df = df.loc[available].copy()
+                df['speed_total'] = _sum_speed_cols(df)
+                df['__train'] = train
+                df['__val'] = val
+                df['__model'] = df.index
+                rows.append(df)
 
-    metrics_config = {  # metrics to plot
-        'mAP50': {
-            'column': 'metrics/mAP50(B)',
-            'ylabel': 'mAP50',
-            'color': 'royalblue',
-            'ylim': (0, 0.55),
-            'higher_better': True
-        },
-        'Precision': {
-            'column': 'metrics/precision(B)',
-            'ylabel': 'Precision',
-            'color': 'mediumseagreen',
-            'ylim': (0, 1.0),
-            'higher_better': True
-        },
-        'Recall': {
-            'column': 'metrics/recall(B)',
-            'ylabel': 'Recall',
-            'color': 'darkorange',
-            'ylim': (0, 0.55),
-            'higher_better': True
-        },
-        'FPS': {
-            'column': 'speed_total',
-            'ylabel': 'FPS (@A100)',
-            'color': 'mediumpurple',
-            'ylim': (0, None),
-            'higher_better': True,
-            'transform': lambda x: 1000/x
-        },
-        'mUE50': {
-            'column': 'metrics/mUE50',
-            'ylabel': 'mUE',
-            'color': 'orangered',
-            'ylim': (0, 0.55),
-            'higher_better': False
-        },
-        'AUROC50': {
-            'column': 'metrics/AUROC50',
-            'ylabel': 'AUROC',
-            'color': 'forestgreen',
-            'ylim': (0.5, 1.0),
-            'higher_better': True
-        },
-        'FPR95_50': {
-            'column': 'metrics/FPR95_50',
-            'ylabel': 'FPR95',
-            'color': 'crimson',
-            'ylim': (0, 1.0),
-            'higher_better': False
-        }
-    }
-    
-    num_datasets = len(datasets)
-    fig, axs = plt.subplots(len(metrics_config), num_datasets, figsize=(4 * num_datasets, 4 * len(metrics_config)))
-    
-    if num_datasets == 1:
-        axs = axs.reshape(-1, 1)
-    
-    for metric_idx, (metric_name, config) in enumerate(metrics_config.items()):
-        for dataset_idx, (dataset_name, df) in enumerate(datasets.items()):
-            ax = axs[metric_idx, dataset_idx]
-            
-            if config['column'] in df.columns:
-                values = df[config['column']]
-                                
-                # Apply transformation if specified (e.g., 1/x for FPS)
-                if 'transform' in config:
-                    values = values.apply(config['transform'])
-                
-                bars = ax.bar(df.index, values, color='grey')
-                
-                # Handle dynamic ylim for FPS
-                if config['ylim'][1] is None:
-                    ax.set_ylim(0, values.max() * 1.1)
-                else:
-                    ax.set_ylim(config['ylim'])
-                    
-                ax.set_ylabel(config['ylabel'])
-                ax.set_title(f"{dataset_name.replace('val-', '').replace('-from-coco80', '').replace('-coco80', '').replace('-', ' ').title().replace('Raincityscapes', 'RainCityscapes')}")
-                ax.tick_params(axis='x', rotation=45)
-                ax.set_xticks(range(len(df.index)))
-                ax.set_xticklabels(df.index, rotation=45, ha='right')
-                
-                # Color code bars based on performance (green for best, red for worst)
-                if config['higher_better']:
-                    best_idx = np.argmax(values)
-                    worst_idx = np.argmin(values)
-                else:
-                    best_idx = np.argmin(values)
-                    worst_idx = np.argmax(values)
-                
-                bars[best_idx].set_color('lightgreen')
-                bars[worst_idx].set_color('lightcoral')
-            else:
-                ax.text(0.5, 0.5, f'{config["column"]}\nnot available', ha='center', va='center', 
-                       transform=ax.transAxes, fontsize=FONT_MEDIUM)
-                ax.set_title(f"{dataset_name.replace('val-', '').replace('-from-coco80', '').replace('-coco80', '').title()}")
-    
+    if not rows:
+        return pd.DataFrame()
+
+    df_all = pd.concat(rows, axis=0, ignore_index=False)
+    df_all['model'] = df_all['__model'].map(MODEL_RENAME).fillna(df_all['__model'])
+    idx = pd.MultiIndex.from_arrays([df_all['__train'], df_all['__val'], df_all['model']],
+                                    names=['train', 'val', 'model'])
+    df_all = df_all.drop(columns=['__train','__val','__model'])
+    df_all = df_all.set_index(idx)
+    return df_all
+
+def color_best_worst(bars, values, higher_better):
+    if len(values) == 0:
+        return
+    best = np.argmax(values) if higher_better else np.argmin(values)
+    worst = np.argmin(values) if higher_better else np.argmax(values)
+    bars[best].set_color('lightgreen')
+    bars[worst].set_color('lightcoral')
+
+def setup_axis(ax, names, values, cfg, title):
+    ymin, ymax = cfg.ylim
+    if ymax is None:
+        ymax = (max(values)*1.1) if len(values) else 1.0
+    ax.set_ylim(ymin, ymax)
+    ax.set_ylabel(cfg.ylabel)
+    ax.set_title(format_dataset_name(title))
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels(names, rotation=45, ha='right')
+
+def series_for_metric(df_all, cfg):
+    """
+    returns a tidy frame with columns:
+      train, val, model, value  (value is transformed if needed)
+    """
+    if cfg.column not in df_all.columns:
+        return pd.DataFrame(columns=['train','val','model','value'])
+    s = df_all[cfg.column].copy()
+    if cfg.transform is not None:
+        s = cfg.transform(s)
+    out = s.reset_index().rename(columns={cfg.column:'value'})
+    return out  # columns: train, val, model, value
+
+def mean_by_val_across_trains(df_metric):
+    """
+    Returns:
+      - per_val_mean: dict[val_name] -> DataFrame(index=model, value=mean across trains)
+      - overall_mean: DataFrame(index=model, value=mean across (val, train))
+    """
+    per_val_mean = {}
+    overall_chunks = []
+    for val_name, g in df_metric.groupby('val'):
+        m = g.groupby('model')['value'].mean().to_frame('value')
+        per_val_mean[val_name] = m
+        overall_chunks.append(m.rename(columns={'value': val_name}))
+
+    if overall_chunks:
+        overall = pd.concat(overall_chunks, axis=1).mean(axis=1).to_frame('value')
+    else:
+        overall = pd.DataFrame(columns=['value'])
+
+    return per_val_mean, overall
+
+def plot_overall_grid(df_all, metrics):
+    """One figure: rows = metrics, columns = each val + 'Overall Mean'."""
+    if df_all.empty:
+        print("No results found.")
+        return
+
+    all_vals = order_vals(df_all.index.get_level_values('val').unique())
+    ncols = len(all_vals) + 1
+    fig, axs = plt.subplots(len(metrics), ncols, figsize=(4*ncols, 4*len(metrics)))
+
+    for r, (mname, cfg) in enumerate(metrics.items()):
+        dfm = series_for_metric(df_all, cfg)
+        per_val, overall = mean_by_val_across_trains(dfm)
+
+        for c, val in enumerate(all_vals):
+            ax = axs[r, c] if len(metrics) > 1 else axs[c]
+            if val not in per_val or per_val[val].empty:
+                ax.text(0.5, 0.5, f'{cfg.column}\nnot available', ha='center', va='center', transform=ax.transAxes)
+                ax.set_title(format_dataset_name(val))
+                continue
+
+            m = per_val[val]
+            names = order_models(m.index)
+            vals = m['value'].to_numpy()
+            bars = ax.bar(names, vals, color='dimgrey')
+            color_best_worst(bars, vals, cfg.higher_better)
+            setup_axis(ax, names, vals, cfg, val)
+
+        axm = axs[r, -1] if len(metrics) > 1 else axs[-1]
+        if not overall.empty:
+            names = order_models(overall.index)
+            vals = overall['value'].to_numpy()
+            bars = axm.bar(names, vals, color='black')
+            color_best_worst(bars, vals, cfg.higher_better)
+            setup_axis(axm, names, vals, cfg, 'Overall Mean')
+        else:
+            axm.text(0.5, 0.5, f'{cfg.column}\nnot available', ha='center', va='center', transform=axm.transAxes)
+            axm.set_title('Overall Mean')
+
+    if len(all_vals) > 0:
+        line_x = len(all_vals) / (len(all_vals) + 1)
+        fig.add_artist(plt.Line2D([line_x, line_x], [0, 1], color='grey', linewidth=1, linestyle='--',
+                                  transform=fig.transFigure, zorder=10))
+
     legend_elements = [
-        Patch(facecolor='lightgreen', label='Best'),
-        Patch(facecolor='lightcoral', label='Worst'),
-        Patch(facecolor='grey', label='Others')
+        Patch(facecolor='limegreen', label='Best'),
+        Patch(facecolor='coral', label='Worst'),
+        Patch(facecolor='dimgrey', label='Mean across Train Datasets'),
+        Patch(facecolor='black', label='Overall Mean'),
     ]
-    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.93), 
-               ncol=3, fontsize=FONT_SMALL)
+    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.995), ncol=4, fontsize=FONT_MEDIUM)
+    plt.suptitle("Validation Mean Performance Across All Training Datasets", fontsize=FONT_LARGE, y=1.01)
+    
+    fig.text(0.5, -0.01, 'Validation Datasets', ha='center', va='bottom', fontsize=FONT_LARGE)
+    fig.text(-0.005, 0.5, 'Metrics (← lower is better, → higher is better)', ha='center', va='center', 
+             rotation=90, fontsize=FONT_LARGE)
     
     plt.tight_layout()
-    plt.suptitle(f"Metrics for YOLO11n-based Models trained on {train_dataset_path.split('train')[1].replace('-', '').replace('fromcoco80', '').replace('coco80', '').title()} Dataset", 
-                fontsize=FONT_LARGE, y=0.94)
-    plt.subplots_adjust(top=0.90)
     plt.show()
 
+def plot_per_train_grids(df_all, metrics):
+    """One figure per train set: rows = metrics, columns = each val + 'Mean'."""
+    if df_all.empty:
+        return
 
-def create_radar_chart(datasets, train_dataset_path, chosen_val_dataset='val-bdd100k-coco80'):
-    if chosen_val_dataset not in datasets:
-        chosen_val_dataset = list(datasets.keys())[0]
-        print(f"Dataset '{chosen_val_dataset}' not found, using {chosen_val_dataset}")
-    
-    df_selected = datasets[chosen_val_dataset]
-    
-    rename_dict_cols = {
-        'metrics/precision(B)': 'Precision',
-        'metrics/recall(B)': 'Recall',
-        'metrics/mAP50(B)': 'mAP50',
-        'speed_total': 'FPS (@A100)',
-        'metrics/mUE50': 'mUE50',
-    }
-    
-    color_list = ['k', 'tomato', 'deepskyblue', 'limegreen', 'gold', 'orchid', 'lightcoral', 'lightseagreen']
-    colors = {idx: color for idx, color in zip(df_selected.index, color_list[:len(df_selected.index)])}
-    
-    df = df_selected[rename_dict_cols.keys()].copy()
-    # Convert ms to fps (1000ms/s divided by ms per image = fps)
-    df.loc[:, 'speed_total'] = 1000 / df['speed_total']
-    # Invert mUE so lower values (better) become higher values for radar visualization
-    df.loc[:, 'metrics/mUE50'] = 1 / df['metrics/mUE50']
-    # Take base index, and normalize all values to it
-    df = df / df.iloc[0]
-    
-    df.rename(columns=rename_dict_cols, inplace=True)
-    
-    categories = list(df.columns)
-    num_vars = len(categories)
-    
-    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
-    angles += angles[:1]  # Repeat the first angle to close the plot
-    
-    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
-    
-    for idx in df.index:
-        values = df.loc[idx].tolist()
-        values += values[:1]  # Repeat the first value to close the plot
-        ax.fill(angles, values, alpha=0.50, color=colors[idx], label=idx)
-        ax.plot(angles, values, color=colors[idx])
-    
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(categories)
-    
-    ylim = round(max(df.max()), 1) + 0.1
-    ax.set_ylim(0, ylim)
-    
-    plt.legend(loc='upper right', bbox_to_anchor=(1.1, 1.1))
-    
-    ax.tick_params(axis='x', pad=20)
-    ax.set_yticks(np.arange(0, ylim, 0.2))
-    ax.set_yticklabels(ax.get_yticks(), rotation=45)
-    
-    ax.set_yticklabels(['{:,.0%}'.format(x) for x in ax.get_yticks()])
-    ax.set_theta_offset(np.pi / 2)
-    
-    ax.yaxis.grid(True, linestyle='--', alpha=0.5)
-    ax.axhline(1, color='black', linewidth=1, linestyle='--')
-    ax.set_rlabel_position(-45)
-    dataset_name = chosen_val_dataset.replace('val-', '').replace('-from-coco80', '').replace('-coco80', '').replace('-', ' ').title().replace('Raincityscapes', 'RainCityscapes')
-    ax.set_title(f"{dataset_name} Validation Performance relative to base model (100%)".title(), pad=60)
-    ax.title.set_position([.5, 1.4])
-    
-    # Save the plot
-    path_base = os.path.join(script_dir, '..', 'interim_results', 'detect')
-    newest_results = 'data_splits_and_models'
-    path = f'{path_base}/{newest_results}/{chosen_val_dataset}'
-    plt.savefig(f'{path}/radar_chart.png', bbox_inches='tight', dpi=600)
-    plt.savefig(f'{path}/radar_chart.pdf', bbox_inches='tight')
-    plt.show()
+    for train, df_t in df_all.groupby(level='train'):
+        vals = order_vals(df_t.index.get_level_values('val').unique())
+        ncols = len(vals) + 1
+        fig, axs = plt.subplots(len(metrics), ncols, figsize=(4*ncols, 4*len(metrics)))
+
+        per_metric_means = {}
+        for mname, cfg in metrics.items():
+            dfm = series_for_metric(df_t, cfg)
+            per_val, _ = mean_by_val_across_trains(dfm)
+            if per_val:
+                aligned = pd.concat([v.rename(columns={'value': k}) for k, v in per_val.items()], axis=1)
+                per_metric_means[mname] = aligned.mean(axis=1).to_frame('value')
+            else:
+                per_metric_means[mname] = pd.DataFrame(columns=['value'])
+
+        for r, (mname, cfg) in enumerate(metrics.items()):
+            dfm = series_for_metric(df_t, cfg)
+            per_val, _ = mean_by_val_across_trains(dfm)
+
+            for c, val in enumerate(vals):
+                ax = axs[r, c] if len(metrics) > 1 else axs[c]
+                if val not in per_val or per_val[val].empty:
+                    ax.text(0.5, 0.5, f'{cfg.column}\nnot available', ha='center', va='center', transform=ax.transAxes)
+                    ax.set_title(format_dataset_name(val))
+                    continue
+                m = per_val[val]
+                names = order_models(m.index)
+                vals_ = m['value'].to_numpy()
+                bars = ax.bar(names, vals_, color='darkgrey')
+                color_best_worst(bars, vals_, cfg.higher_better)
+                setup_axis(ax, names, vals_, cfg, val)
+
+            # mean column
+            axm = axs[r, -1] if len(metrics) > 1 else axs[-1]
+            mean_df = per_metric_means[mname]
+            if not mean_df.empty:
+                names = order_models(mean_df.index)
+                vals_ = mean_df['value'].to_numpy()
+                bars = axm.bar(names, vals_, color='dimgrey')
+                color_best_worst(bars, vals_, cfg.higher_better)
+                setup_axis(axm, names, vals_, cfg, 'Mean')
+            else:
+                axm.text(0.5, 0.5, f'{cfg.column}\nnot available', ha='center', va='center', transform=axm.transAxes)
+                axm.set_title('Mean')
+
+        if len(vals) > 0:
+            line_x = len(vals) / (len(vals) + 1)
+            fig.add_artist(plt.Line2D([line_x, line_x], [0, 1], color='darkgrey', linewidth=1, linestyle='--',
+                                      transform=fig.transFigure, zorder=10))
+
+        legend_elements = [
+            Patch(facecolor='lightgreen', label='Best'),
+            Patch(facecolor='lightcoral', label='Worst'),
+            Patch(facecolor='darkgrey', label='Others'),
+            Patch(facecolor='dimgrey', label='Mean'),
+        ]
+        fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.995), ncol=4, fontsize=FONT_SMALL)
+        plt.suptitle(f"Metrics for YOLO11n-based Models trained on {format_dataset_name(train)} Dataset", fontsize=FONT_LARGE, y=1.01)
+        
+        # Add common x and y labels
+        fig.text(0.5, -0.01, 'Validation Datasets', ha='center', va='bottom', fontsize=FONT_LARGE)
+        fig.text(-0.005, 0.5, 'Metrics (← lower is better, → higher is better)', ha='center', va='center', 
+                 rotation=90, fontsize=FONT_LARGE)
+        
+        plt.tight_layout()
+        plt.show()
+
+def load_results_data(newest_results='results/detect/data_splits_and_models'):
+    here = Path(__file__).resolve().parent
+    results_root = here.parent / newest_results
+    return load_all_results(results_root)
+
+def create_extended_barplots(df_all, plot_per_train=False):
+    # plots average of validation sets over all training sets
+    plot_overall_grid(df_all, METRICS)
+    if plot_per_train: 
+        # plots all validations per training dataset
+        plot_per_train_grids(df_all, METRICS)

@@ -53,6 +53,7 @@ class DetectionPredictor(BasePredictor):
             >>> processed_results = predictor.postprocess(preds, img, orig_imgs)
         """
         save_feats = getattr(self, "_feats", None) is not None
+        print(preds.shape) # TODO remove, but why does it fix the bug?
         preds = ops.non_max_suppression(
             preds,
             self.args.conf,

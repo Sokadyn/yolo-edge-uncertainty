@@ -1647,7 +1647,9 @@ class DetMetricsUncertainty(DetMetrics):
             "metrics/FPR95_50",
             "metrics/FPR95_50-95",
             "metrics/AUROC50",
-            "metrics/AUROC50-95"
+            "metrics/AUROC50-95",
+            "metrics/E-AURC50",
+            "metrics/E-AURC50-95"
         ]
 
     def mean_results(self) -> List[float]:
@@ -1663,7 +1665,9 @@ class DetMetricsUncertainty(DetMetrics):
             getattr(self, '_overall_fpr95_50', 1.0),  # FPR at 95% recall for IoU@0.5
             getattr(self, '_overall_fpr95_50_95', 1.0),  # FPR at 95% recall for IoU@0.5:0.95
             getattr(self, '_overall_auroc_50', 0.0),  # overall AUROC for IoU@0.5
-            getattr(self, '_overall_auroc_50_95', 0.0)  # overall AUROC for 50-95
+            getattr(self, '_overall_auroc_50_95', 0.0),  # overall AUROC for 50-95
+            getattr(self, '_e_aurc_50', 0.0),  # E-AURC for IoU@0.5
+            getattr(self, '_e_aurc_50_95', 0.0)  # E-AURC for IoU@0.5:0.95
         ]
 
     @property
@@ -1681,7 +1685,9 @@ class DetMetricsUncertainty(DetMetrics):
             "metrics/FPR95_50": getattr(self, '_overall_fpr95_50', 1.0),  # FPR at 95% recall for IoU@0.5
             "metrics/FPR95_50-95": getattr(self, '_overall_fpr95_50_95', 1.0),  # FPR at 95% recall for IoU@0.5:0.95
             "metrics/AUROC50": getattr(self, '_overall_auroc_50', 0.0),  # Use overall AUROC for IoU@0.5
-            "metrics/AUROC50-95": getattr(self, '_overall_auroc_50_95', 0.0)  # Use overall AUROC for 50-95
+            "metrics/AUROC50-95": getattr(self, '_overall_auroc_50_95', 0.0),  # Use overall AUROC for IoU@0.5:0.95
+            "metrics/E-AURC50": getattr(self, '_e_aurc_50', 0.0),  # E-AURC for IoU@0.5
+            "metrics/E-AURC50-95": getattr(self, '_e_aurc_50_95', 0.0)  # E-AURC for IoU@0.5:0.95
         })
         return results
 
@@ -1696,8 +1702,12 @@ class DetMetricsUncertainty(DetMetrics):
         mue_results = self.calculate_uncertainty_error(stats)
         self.box.update_uncertainty(mue_results)
         self.calculate_auroc_scores(stats)
+        self._e_aurc_50 = self.calculate_e_aurc(stats)
+        self._e_aurc_50_95 = self.calculate_e_aurc_multi_iou(stats)
+        
         if plot:
             self.plot_roc_curve(save_dir=save_dir, names=tuple(self.names.values()) if hasattr(self, 'names') else ())
+            self.plot_risk_coverage_curve(stats, save_dir=save_dir)
         return stats
 
     def calculate_uncertainty_error(self, stats: Dict[str, np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -1759,7 +1769,6 @@ class DetMetricsUncertainty(DetMetrics):
             ue_correct_per_iou[i] = float(min_ue_correct)
             ue_incorrect_per_iou[i] = float(min_ue_incorrect)
 
-        # Store per-IoU-threshold results
         self.ue_per_iou = ue_per_iou
         self.ue_threshold_per_iou = ue_threshold_per_iou
         self.ue_correct_per_iou = ue_correct_per_iou
@@ -1768,48 +1777,36 @@ class DetMetricsUncertainty(DetMetrics):
         self.ue_threshold = float(np.mean(ue_threshold_per_iou))
         return ue_per_iou, ue_threshold_per_iou, ue_correct_per_iou, ue_incorrect_per_iou
 
-    def calculate_auroc_scores(self, stats: Dict[str, np.ndarray], use_uncertainty: bool = True) -> None:
+    def calculate_auroc_scores(self, stats: Dict[str, np.ndarray]) -> None:
         """Calculate AUROC scores for IoU@0.5 and IoU@0.5:0.95.
         
         Args:
             stats: Dictionary containing tp, conf, pred_cls, and optionally unc
-            use_uncertainty: If True, use uncertainty scores instead of confidence scores
         """
-        try:
-            from sklearn.metrics import roc_auc_score, roc_curve
-        except ImportError:
-            print("Warning: sklearn not available, AUROC scores will be 0")
-            return
-            
+        from sklearn.metrics import roc_auc_score, roc_curve            
         tp = stats["tp"]  # shape (N, num_iou_thresholds)
         pred_cls = stats.get("pred_cls", np.array([]))  # shape (N,)
+        scores = -stats["unc"]  # shape (N,) - negate uncertainty to treat lower uncertainty as higher score
         
-        # Choose between uncertainty or confidence scores
-        if use_uncertainty and "unc" in stats:
-            score = -stats["unc"]  # shape (N,) - negate uncertainty to treat lower uncertainty as higher score
-        else:
-            score = stats.get("conf", np.array([]))  # shape (N,)
-        
-        if tp.size == 0 or score.size == 0 or pred_cls.size == 0:
+        if tp.size == 0 or scores.size == 0 or pred_cls.size == 0:
             return
             
         # AUROC for IoU@0.5 (index 0)
-        self.auroc50_scores = self._calculate_auroc_per_iou(tp[:, 0], score, pred_cls, store_curves=True)
+        self.auroc50_scores = self._calculate_auroc_per_iou(tp[:, 0], scores, pred_cls, store_curves=True)
         
         # AUROC for IoU@0.5:0.95 (mean over all IoU thresholds)
         auroc_all_iou = []
         overall_aurocs = []
         overall_fpr95s = []
         for i in range(tp.shape[1]):
-            auroc_per_class = self._calculate_auroc_per_iou(tp[:, i], score, pred_cls)
+            auroc_per_class = self._calculate_auroc_per_iou(tp[:, i], scores, pred_cls)
             auroc_all_iou.append(auroc_per_class)
             if len(tp[:, i]) > 0 and len(np.unique(tp[:, i])) > 1:
                 try:
                     from sklearn.metrics import roc_auc_score, roc_curve
-                    overall_auroc_iou = roc_auc_score(tp[:, i], score)
+                    overall_auroc_iou = roc_auc_score(tp[:, i], scores)
                     overall_aurocs.append(overall_auroc_iou)
-                    # Calculate FPR95 for this IoU threshold
-                    fpr_iou, tpr_iou, _ = roc_curve(tp[:, i], score)
+                    fpr_iou, tpr_iou, _ = roc_curve(tp[:, i], scores)
                     fpr95_iou = self._calculate_fpr95(fpr_iou, tpr_iou)
                     overall_fpr95s.append(fpr95_iou)
                 except (ImportError, ValueError):
@@ -1825,11 +1822,7 @@ class DetMetricsUncertainty(DetMetrics):
 
     def _calculate_auroc_per_iou(self, tp_iou: np.ndarray, score: np.ndarray, pred_cls: np.ndarray, store_curves: bool = False) -> np.ndarray:
         """Calculate AUROC scores per class for a specific IoU threshold."""
-        try:
-            from sklearn.metrics import roc_auc_score, roc_curve
-        except ImportError:
-            return np.zeros(self.nc)
-        
+        from sklearn.metrics import roc_auc_score, roc_curve
         auroc_scores = np.zeros(self.nc)
         
         # Calculate overall AUC treating all detections as binary (TP vs FP)
@@ -1872,13 +1865,182 @@ class DetMetricsUncertainty(DetMetrics):
         if len(fpr) == 0 or len(tpr) == 0:
             return 1.0  # Worst case
         
-        # Find the point where TPR >= 0.95
         idx_95 = np.where(tpr >= 0.95)[0]
         if len(idx_95) == 0:
             return 1.0  # If we never reach 95% recall, return worst case
         
         # Take the first point where TPR >= 0.95 (lowest FPR at 95% recall)
         return float(fpr[idx_95[0]])
+
+    def calculate_e_aurc(self, stats: Dict[str, np.ndarray]) -> float:
+        """Calculate E-AURC (Excess Area Under Risk Coverage) metric.
+        
+        E-AURC = AURC - AURC_optimal, where AURC_optimal is the Area Under Risk Coverage 
+        of an optimal confidence function that perfectly orders samples by their risk.
+        
+        Args:
+            stats: Dictionary containing tp, conf, and optionally unc
+            
+        Returns:
+            float: E-AURC score (lower is better, 0 is optimal)
+        """
+        tp = stats.get("tp", np.array([]))  # shape (N, num_iou_thresholds)
+        
+        scores = -stats["unc"]  # negate uncertainty to treat lower uncertainty as higher confidence
+        
+        if tp.size == 0 or scores.size == 0:
+            return 0.0
+        
+        # Use IoU@0.5 (index 0) for E-AURC calculation
+        tp_binary = tp[:, 0] if tp.shape[1] > 0 else tp
+        risks = 1 - tp_binary
+        aurc = self._calculate_aurc(scores, risks)
+        aurc_optimal = self._calculate_optimal_aurc(risks)
+        e_aurc = aurc - aurc_optimal
+        
+        return float(e_aurc)
+
+    def calculate_e_aurc_multi_iou(self, stats: Dict[str, np.ndarray]) -> float:
+        """Calculate E-AURC averaged over IoU thresholds 0.5 to 0.95.
+        
+        Args:
+            stats: Dictionary containing tp, conf, and optionally unc
+        Returns:
+            float: Mean E-AURC score over IoU thresholds 0.5:0.95 (lower is better, 0 is optimal)
+        """
+        tp = stats.get("tp", np.array([]))  # shape (N, num_iou_thresholds)
+        scores = -stats["unc"]  # negate uncertainty to treat lower uncertainty as higher confidence
+        if tp.size == 0 or scores.size == 0:
+            return 0.0
+        
+        e_aurc_values = []
+        num_iou_thresholds = tp.shape[1] if tp.ndim > 1 else 1
+        
+        for iou_idx in range(num_iou_thresholds):
+            tp_binary = tp[:, iou_idx] if tp.ndim > 1 else tp
+            # Calculate risk (error rate) for each sample: 1 - tp (0 for correct, 1 for incorrect)
+            risks = 1 - tp_binary
+            aurc = self._calculate_aurc(scores, risks)
+            aurc_optimal = self._calculate_optimal_aurc(risks)
+            e_aurc = aurc - aurc_optimal
+            e_aurc_values.append(e_aurc)
+        
+        return float(np.mean(e_aurc_values)) if e_aurc_values else 0.0
+    
+    def _calculate_aurc(self, confidence_scores: np.ndarray, risks: np.ndarray) -> float:
+        """Calculate Area Under Risk Coverage curve.
+        
+        Args:
+            confidence_scores: Confidence scores for each sample
+            risks: Risk (error) for each sample (0 for correct, 1 for incorrect)
+            
+        Returns:
+            float: AURC value
+        """
+        if len(confidence_scores) == 0 or len(risks) == 0:
+            return 0.0
+            
+        sorted_indices = np.argsort(-confidence_scores)
+        sorted_risks = risks[sorted_indices]
+        
+        n = len(sorted_risks)
+        if n == 0:
+            return 0.0
+        
+        # Calculate cumulative risk (average risk up to each point)
+        cumulative_risk = np.cumsum(sorted_risks) / np.arange(1, n + 1)
+        coverage = np.arange(1, n + 1) / n  # Calculate coverage (fraction of samples covered)
+        coverage_with_zero = np.concatenate([[0], coverage]) # Add point (0, 0) for coverage=0
+        risk_with_zero = np.concatenate([[0], cumulative_risk])
+        aurc = np.trapz(risk_with_zero, coverage_with_zero) # Calculate AURC using trapezoidal rule
+        
+        return float(aurc)
+    
+    def _calculate_optimal_aurc(self, risks: np.ndarray) -> float:
+        """Calculate optimal AURC (perfect ordering by risk).
+        
+        Args:
+            risks: Risk (error) for each sample (0 for correct, 1 for incorrect)
+            
+        Returns:
+            float: Optimal AURC value
+        """
+        if len(risks) == 0:
+            return 0.0
+            
+        sorted_risks = np.sort(risks)
+        n = len(sorted_risks)
+        cumulative_risk = np.cumsum(sorted_risks) / np.arange(1, n + 1)
+        coverage = np.arange(1, n + 1) / n
+        coverage_with_zero = np.concatenate([[0], coverage])
+        risk_with_zero = np.concatenate([[0], cumulative_risk])
+        aurc_optimal = np.trapz(risk_with_zero, coverage_with_zero)
+        
+        return float(aurc_optimal)
+
+    def plot_risk_coverage_curve(self, stats: Dict[str, np.ndarray], save_dir: Path = Path(".")) -> None:
+        """Plot and save the Risk-Coverage curve for E-AURC visualization.
+        
+        Args:
+            stats: Dictionary containing tp, conf, and optionally unc
+            save_dir: Directory to save the plot
+            use_uncertainty: If True, use uncertainty scores instead of confidence scores
+        """
+        import matplotlib.pyplot as plt
+        
+        tp = stats.get("tp", np.array([]))
+        if tp.size == 0:
+            return
+            
+        scores = -stats["unc"]
+        
+        if scores.size == 0:
+            return
+            
+        # Use IoU@0.5 for plotting
+        tp_binary = tp[:, 0] if tp.shape[1] > 0 else tp
+        risks = 1 - tp_binary
+        
+        sorted_indices = np.argsort(-scores)
+        sorted_risks = risks[sorted_indices]
+        
+        n = len(sorted_risks)
+        if n == 0:
+            return
+        
+        cumulative_risk = np.cumsum(sorted_risks) / np.arange(1, n + 1)
+        coverage = np.arange(1, n + 1) / n
+        
+        optimal_sorted_risks = np.sort(risks)
+        optimal_cumulative_risk = np.cumsum(optimal_sorted_risks) / np.arange(1, n + 1)
+        
+        aurc_actual = np.trapz(np.concatenate([[0], cumulative_risk]), np.concatenate([[0], coverage]))
+        aurc_optimal = np.trapz(np.concatenate([[0], optimal_cumulative_risk]), np.concatenate([[0], coverage]))
+        e_aurc = aurc_actual - aurc_optimal
+        
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6), tight_layout=True)
+        
+        ax.plot(coverage, cumulative_risk, linewidth=2, color='blue', 
+               label=f'Actual (AURC={aurc_actual:.4f})')
+        
+        ax.plot(coverage, optimal_cumulative_risk, linewidth=2, color='green', linestyle='--',
+               label=f'Optimal (AURC={aurc_optimal:.4f})')
+        
+        ax.fill_between(coverage, cumulative_risk, optimal_cumulative_risk, 
+                       alpha=0.3, color='red', label=f'E-AURC={e_aurc:.4f}')
+        
+        ax.set_xlabel('Coverage (Fraction of Samples)')
+        ax.set_ylabel('Risk (Error Rate)')
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, max(1, np.max(cumulative_risk) * 1.1))
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        ax.set_title(f'Excess Risk-Coverage Curve')
+        
+        save_path = save_dir / 'e-rc_curve.png'
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+        plt.close(fig)
 
     def plot_roc_curve(self, save_dir: Path = Path("."), names: Tuple[str, ...] = ()) -> None:
         """Plot ROC curve for all classes."""

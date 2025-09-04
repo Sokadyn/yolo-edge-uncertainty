@@ -17,8 +17,9 @@ from .block import DFL, SAVPE, BNContrastiveHead, ContrastiveHead, Proto, Residu
 from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
-from ultralytics.utils.ops import calc_cls_sigmoid_single_sample_uncertainty, calc_cls_softmax_single_sample_uncertainty, calc_cls_sigmoid_multi_sample_uncertainty, calc_cls_softmax_multi_sample_uncertainty
+from ultralytics.utils.ops import calc_uncertainty
 from ultralytics.nn.modules.activation import AGLU
+from torch.distributions import Dirichlet
 
 __all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOEDetect", "YOLOESegment", "DetectBaseConfidence", "DetectBaseUncertainty", "DetectEnsemble", "DetectMCDropout", "DetectEDLMEH"
 
@@ -1230,7 +1231,30 @@ class v10Detect(Detect):
         self.cv2 = self.cv3 = nn.ModuleList([nn.Identity()] * self.nl)
 
 
-class DetectBaseConfidence(Detect):
+class UncertaintyMixin:
+    """
+    Mixin class providing uncertainty parameter management for detection heads.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        """Initialize uncertainty parameters with defaults."""
+        super().__init__(*args, **kwargs)
+        # Set default uncertainty parameters
+        self.uncertainty_top_k = 10 # take only top k class scores for uncertainty calculation
+        self.uncertainty_type = 'total' # 'aleatoric', 'epistemic', 'total'
+        self.uncertainty_method = 'softmax-entropy' # 'softmax-entropy', 'sigmoid-entropy', 'sigmoid-complement'
+
+    def set_uncertainty_params(self, uncertainty_top_k=None, uncertainty_type=None, uncertainty_method=None):
+        """Set uncertainty calculation parameters dynamically."""
+        if uncertainty_top_k is not None:
+            self.uncertainty_top_k = uncertainty_top_k
+        if uncertainty_type is not None:
+            self.uncertainty_type = uncertainty_type
+        if uncertainty_method is not None:
+            self.uncertainty_method = uncertainty_method
+
+
+class DetectBaseConfidence(UncertaintyMixin, Detect):
     """
     YOLO Detect base head that uses 1 - max confidence score as uncertainty value.
     Baseline with no signigicant overheads or changes for uncertainty calculation.
@@ -1244,7 +1268,8 @@ class DetectBaseConfidence(Detect):
             nc (int): Number of classes.
             ch (tuple): Tuple of channel sizes from backbone feature maps.
         """
-        super().__init__(nc, ch)  # Initialize the parent class
+        super().__init__(nc, ch)
+        self.uncertainty_method = 'sigmoid-complement'  # override default for confidence head
 
     def forward(self, x: List[torch.Tensor]) -> Union[List[torch.Tensor], Tuple]:
         """Concatenate and return predicted bounding boxes, class probabilities, and confidence-based uncertainty."""
@@ -1261,11 +1286,11 @@ class DetectBaseConfidence(Detect):
         if self.export:
             return y
 
-        # Calculate uncertainty as 1 - max confidence score
-        cls_probs = y[:, 4:, :]
-        max_conf = cls_probs.max(1).values
-        uncertainty = 1 - max_conf
-        y = torch.cat((y, uncertainty.unsqueeze(1)), dim=1)
+        cls_logits = y[:, 4:, :].transpose(1, 2)  # (batch, num_detectors, num_classes)
+        uncertainty = calc_uncertainty(cls_logits, method=self.uncertainty_method, k=self.uncertainty_top_k, 
+                                     uncertainty_type=self.uncertainty_type)
+        uncertainty = uncertainty.transpose(1, 2)  # (batch, 1, num_detectors)
+        y = torch.cat((y, uncertainty), dim=1)
 
         return y, x
     
@@ -1277,7 +1302,7 @@ class DetectBaseConfidence(Detect):
         raise NotImplementedError("Not implemented to handle uncertainty output yet.")
 
 
-class DetectBaseUncertainty(Detect):
+class DetectBaseUncertainty(UncertaintyMixin, Detect):
     """
     YOLO Detect base head extended with entropy calcualtion of the calssification scores (per detector).
     Baseline with no signigicant overheads or changes for uncertainty calculation.
@@ -1309,10 +1334,11 @@ class DetectBaseUncertainty(Detect):
         if self.export:
             return y
 
-        cls_probs = y[: , 4:, :]
-        # TODO: check weather to calculate entropy using sigmoid or softmax as base distirbution
-        entropy = calc_cls_softmax_single_sample_uncertainty(cls_probs.softmax(dim=1))
-        y = torch.cat((y, entropy), dim=1)
+        cls_logits = y[: , 4:, :].transpose(1, 2)  # (batch, num_detectors, num_classes)
+        uncertainty = calc_uncertainty(cls_logits, method=self.uncertainty_method, k=self.uncertainty_top_k,
+                                 uncertainty_type=self.uncertainty_type)
+        uncertainty = uncertainty.transpose(1, 2)  # (batch, 1, num_detectors)
+        y = torch.cat((y, uncertainty), dim=1)
 
         return y, x
     
@@ -1324,7 +1350,7 @@ class DetectBaseUncertainty(Detect):
         raise NotImplementedError("Not implemented to handle uncertainty output yet.")
     
 
-class DetectEnsemble(Detect):
+class DetectEnsemble(UncertaintyMixin, Detect):
     """
     YOLO Detect head with ensemble of classification heads for uncertainty estimation.
 
@@ -1424,11 +1450,7 @@ class DetectEnsemble(Detect):
                 this.append(torch.cat((self.cv2[i](x[i]), cls), 1))
             xs.append(this)
 
-        y = self._inference(xs)
-
-        x_mean = []
-        for i in range(self.nl):
-            x_mean.append(torch.mean(torch.stack([t[i] for t in xs], dim=0), dim=0))
+        y, x_mean = self._inference(xs)
         return y if self.export else (y, x_mean)
 
     def forward_end2end(self, x):
@@ -1464,7 +1486,9 @@ class DetectEnsemble(Detect):
         # Collect multiple class probability predictions from ensemble
         cls_samples = torch.stack([cls.transpose(-1, -2)
                                 for _, cls in (x_cat.split((self.reg_max * 4, self.nc), dim=1) for x_cat in x_cats)], dim=0)
-        uncertainty = calc_cls_softmax_multi_sample_uncertainty(cls_samples.softmax(-1)).transpose(-1, -2)
+        uncertainty = calc_uncertainty(cls_samples, method=self.uncertainty_method, 
+                                      k=self.uncertainty_top_k, uncertainty_type=self.uncertainty_type,
+                                      multi_sample=True).transpose(1, 2)  # from (batch, num_detectors, 1) to (batch, 1, num_detectors)
         if self.export and self.format in {"tflite", "edgetpu"}:
             grid_h = shape[2]
             grid_w = shape[3]
@@ -1478,7 +1502,7 @@ class DetectEnsemble(Detect):
             return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1), uncertainty.permute(0, 2, 1)
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
-        return torch.cat((dbox, cls.sigmoid(), uncertainty), 1)
+        return torch.cat((dbox, cls.sigmoid(), uncertainty), 1), x_mean
 
     def bias_init(self):
         """Initialize biases for ensemble detection heads."""
@@ -1501,7 +1525,7 @@ class DetectEnsemble(Detect):
 
 
 
-class DetectMCDropout(Detect):
+class DetectMCDropout(UncertaintyMixin, Detect):
     """
     YOLO Detect head with Monte Carlo Dropout for uncertainty estimation.
     
@@ -1524,7 +1548,7 @@ class DetectMCDropout(Detect):
         self.dropout_methods = ['DropBlock2D', 'Dropout', 'Dropout2d', 'Dropout3d']
         
         # Default dropout parameters, overridden by set_dropout_rates
-        self.dropout_rate = 0.1
+        self.dropout_rate = 0.05
         self.dropblock_size = 3
         self.num_mc_forward_passes = 10
         self.dropout_method_idx = 0  # Default to DropBlock2D (index 0)
@@ -1600,15 +1624,9 @@ class DetectMCDropout(Detect):
                 this.append(torch.cat((self.cv2[i](x[i]), cls), 1))
             xs.append(this)
 
-            y = self._inference(xs)
-
-            x_mean = []
-            for i in range(self.nl):
-                ch_stacked = []
-                for x in xs:
-                    ch_stacked.append(x[i])
-                x_mean.append(torch.mean(torch.stack(ch_stacked), dim=0))
-            return y if self.export else (y, x_mean)
+        y, x_mean = self._inference(xs)
+        return y if self.export else (y, x_mean)
+    
 
     def forward_end2end(self, x):
         raise NotImplementedError("Not implemented to handle uncertainty output yet.")
@@ -1626,12 +1644,8 @@ class DetectMCDropout(Detect):
         # Inference path
         shape = xs[0][0].shape  # BCHW
 
-        x_mean = []
-        for i in range(self.nl):
-            ch_stacked = []
-            for x in xs:
-                ch_stacked.append(x[i])
-            x_mean.append(torch.mean(torch.stack(ch_stacked), dim=0))            
+        x_mean = [torch.stack([sample[i] for sample in xs], dim=0).mean(dim=0)
+                for i in range(self.nl)]          
 
         x_cats = torch.stack([torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2) for x in xs], dim=0)
         x_cat = torch.mean(x_cats, dim=0)
@@ -1649,11 +1663,11 @@ class DetectMCDropout(Detect):
         cls_samples = torch.stack([cls.transpose(-1, -2) 
                                 for _, cls in (x_cat.split((self.reg_max * 4, self.nc), dim=1) for x_cat in x_cats)], dim=0)
 
-        uncertainty = calc_cls_softmax_multi_sample_uncertainty(cls_samples.softmax(-1)).transpose(-1, -2)
-
+        uncertainty = calc_uncertainty(cls_samples, method=self.uncertainty_method, 
+                                      k=self.uncertainty_top_k, uncertainty_type=self.uncertainty_type, 
+                                      multi_sample=True).transpose(-1, -2)
+        
         if self.export and self.format in {"tflite", "edgetpu"}:
-            # Precompute normalization factor to increase numerical stability
-            # See https://github.com/ultralytics/ultralytics/issues/7371
             grid_h = shape[2]
             grid_w = shape[3]
             grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
@@ -1667,7 +1681,7 @@ class DetectMCDropout(Detect):
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
 
-        return torch.cat((dbox, cls.sigmoid(), uncertainty), 1)
+        return torch.cat((dbox, cls.sigmoid(), uncertainty), 1), x_mean
     
     @staticmethod
     def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
@@ -1738,8 +1752,14 @@ class DetectEDLMEH(Detect):
             self.one2one_cv3 = copy.deepcopy(self.cv3)
             self.one2one_meh_lambda = copy.deepcopy(self.meh_lambda)
 
-        self.meh_lambda_activation_idx = 0 # default to 'exp'
-        self._meh_lambda_act = resolve_meh_lambda_activation(self.meh_lambda_activation_idx)
+        self.meh_lambda_activation_idx = 3 # default to aglu
+        MEH_LAMBDA_ACTIVATION_NAMES = list(MEH_LAMBDA_ACTIVATIONS.keys())
+        self._meh_lambda_act = MEH_LAMBDA_ACTIVATIONS[MEH_LAMBDA_ACTIVATION_NAMES[self.meh_lambda_activation_idx]]()
+        
+        # Uncertainty calculation default parameters
+        self.uncertainty_top_k = 10
+        self.uncertainty_type = 'total'
+        self.uncertainty_method = 'softmax-entropy'
 
     def set_meh_lambda_activation_idx(self, idx):
         self.meh_lambda_activation_idx = idx
@@ -1795,9 +1815,10 @@ class DetectEDLMEH(Detect):
         meh_lambda_t[meh_lambda_t.isnan()] = 0.0
         alphas = meh_lambda_t * cls_t.sigmoid() # [batch, detectors, classes]
         alphas = torch.clamp(alphas, min=1e-6)
-        # Calculate uncertainty as K/S (concentration over strength)
-        S = alphas.sum(dim=-1, keepdim=True)  # Dirichlet strength, faster than Dirichlet(S) sampling, but not full unertainty picture
-        uncertainty = (self.nc / S).transpose(-1, -2)  # K/S uncertainty, shape: [batch, 1, 8400]
+        dirichlet_dist = Dirichlet(alphas)
+        samples = dirichlet_dist.sample(torch.tensor([10]))
+        uncertainty = calc_uncertainty(samples, method=self.uncertainty_method, k=self.uncertainty_top_k,
+                                      uncertainty_type=self.uncertainty_type, multi_sample=True).transpose(1, 2)  # from (batch, num_detectors, 1) to (batch, 1, num_detectors)
         if self.export and self.format in {"tflite", "edgetpu"}:
             grid_h = shape[2]
             grid_w = shape[3]
@@ -1814,50 +1835,63 @@ class DetectEDLMEH(Detect):
         return torch.cat((dbox, cls.sigmoid(), uncertainty), 1)
 
     def bias_init(self):
-        """Initialize biases for EDL MEH detection heads including evidence parameters."""
         m = self
         for a, b, c, s in zip(m.cv2, m.cv3, m.meh_lambda, m.stride):
             a[-1].bias.data[:] = 1.0  # box
             b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls
-            c[-1].bias.data[: 1] = math.log(5 / 1 / (640 / s) ** 2)  # meh_lambda
+            c[-1].bias.data[: 1] = 1.0  # meh_lambda - initialize to positive value for EDL
         if self.end2end:
             for a, b, c, s in zip(m.one2one_cv2, m.one2one_cv3, m.one2one_meh_lambda, m.stride):
                 a[-1].bias.data[:] = 1.0
                 b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)
-                c[-1].bias.data[: 1] = math.log(5 / 1 / (640 / s) ** 2)
+                c[-1].bias.data[: 1] = 1.0
 
     @staticmethod
     def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
         raise NotImplementedError("Not implemented to handle uncertainty output yet.")
 
 
-def initialize_uncertainty_layers(model, args):
-    for m in model.modules():
-        class_name = m.__class__.__name__
-        if class_name == "DetectMCDropout":
-                m.num_mc_forward_passes = int(args.num_mc_forward_passes)
-        if class_name == "DetectEnsemble":
-            m.num_ensemble_heads = int(args.num_ensemble_heads)
-        if class_name == "DetectMCDropout" or class_name == "DetectEnsemble":
-            m.set_dropout_rates(
-                args.dropout_rate,
-                args.dropout_method_idx,
-                args.dropblock_size,
-            )
-        if class_name == "DetectEDLMEH":
-            m.set_meh_lambda_activation_idx(int(args.meh_lambda_activation_idx))
+def initialize_uncertainty_layers(model, args): 
+    m = model.model[-1]
+    class_name = m.__class__.__name__
+    print(f"Initializing uncertainty layers for {class_name}...")
+    if class_name == "DetectMCDropout":
+        m.num_mc_forward_passes = int(args.get('num_mc_forward_passes', 10))
+    if class_name == "DetectEnsemble":
+        m.num_ensemble_heads = int(args.get('num_ensemble_heads', 5))
+    if class_name == "DetectMCDropout" or class_name == "DetectEnsemble":
+        m.set_dropout_rates(
+            args.get('dropout_rate', 0.05),
+            args.get('dropout_method_idx', 0),
+            args.get('dropblock_size', 3),
+        )
+    if class_name == "DetectEDLMEH":
+        m.set_meh_lambda_activation_idx(int(args.get('meh_lambda_activation_idx', 3)))
     
+class ExpActivation(nn.Module):
+    def forward(self, x):
+        return torch.exp(x)
+
+class ReLUActivation(nn.Module):
+    def forward(self, x):
+        return torch.relu(x)
+
+class SoftplusActivation(nn.Module):
+    def forward(self, x):
+        return torch.nn.functional.softplus(x)
+
 MEH_LAMBDA_ACTIVATIONS = {
-    'exp': torch.exp,
-    'relu': torch.relu,
-    'softplus': torch.nn.functional.softplus,
-    'aglu': AGLU(),
+    'exp': ExpActivation,
+    'relu': ReLUActivation,
+    'softplus': SoftplusActivation,
+    'aglu': AGLU,
 }
 
 def resolve_meh_lambda_activation(idx):
-    MEH_LAMBDA_ACTIVATION_NAMES = ['exp', 'relu', 'softplus', 'aglu']
+    MEH_LAMBDA_ACTIVATION_NAMES = list(MEH_LAMBDA_ACTIVATIONS.keys())
     if isinstance(idx, int) and 0 <= idx < len(MEH_LAMBDA_ACTIVATION_NAMES):
         name = MEH_LAMBDA_ACTIVATION_NAMES[idx]
-        print(f"Using MEH lambda activation by index: {idx} -> {name}") # TODO: remove
-        return MEH_LAMBDA_ACTIVATIONS[name]
+        print(f"Using MEH lambda activation by index: {idx} -> {name}")
+        activation_class = MEH_LAMBDA_ACTIVATIONS[name]
+        return activation_class()
     raise ValueError(f"Invalid meh_lambda_activation_idx: {idx}")

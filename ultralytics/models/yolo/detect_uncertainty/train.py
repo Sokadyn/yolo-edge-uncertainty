@@ -10,12 +10,11 @@ import torch.nn as nn
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
 from ultralytics.nn.tasks import DetectionModelUncertainty
-from ultralytics.utils import LOGGER, RANK
+from ultralytics.utils import DEFAULT_CFG, LOGGER, RANK
 from ultralytics.utils.plotting import plot_images, plot_labels, plot_results
 from ultralytics.utils.torch_utils import de_parallel, torch_distributed_zero_first
 from ultralytics.models.yolo.detect import DetectionTrainer
 from .val import DetectionValidatorUncertainty
-from ultralytics.nn.modules.head import initialize_uncertainty_layers
 
 class DetectionTrainerUncertainty(DetectionTrainer):
     """
@@ -35,7 +34,6 @@ class DetectionTrainerUncertainty(DetectionTrainer):
             (DetectionModel): YOLO detection model.
         """
         model = DetectionModelUncertainty(cfg, nc=self.data["nc"], ch=self.data["channels"], verbose=verbose and RANK == -1)
-        initialize_uncertainty_layers(model, self.args)
         if weights:
             model.load(weights)
         return model
