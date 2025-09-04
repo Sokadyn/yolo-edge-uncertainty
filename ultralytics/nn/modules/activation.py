@@ -52,5 +52,6 @@ class AGLU(nn.Module):
         Returns:
             (torch.Tensor): Output tensor after applying the AGLU activation function, with the same shape as the input.
         """
-        lam = torch.clamp(self.lambd, min=0.0001)  # Clamp lambda to avoid division by zero
-        return torch.exp((1 / lam) * self.act((self.kappa * x) - torch.log(lam)))
+        lam = torch.clamp(self.lambd.to(x.device), min=0.0001)  # Clamp lambda to avoid division by zero
+        kappa = self.kappa.to(x.device)
+        return torch.exp((1 / lam) * self.act((kappa * x) - torch.log(lam)))

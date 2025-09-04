@@ -944,9 +944,8 @@ class v8DetectionLossEDLMEH:
         # Compute MEH loss: (ls,i - 1 / λs,i)^2
         meh_loss = edl_weight * (cls_loss_per_box.detach() - 1 / meh_lambda) ** 2
         meh_loss *= target_scores.sum(-1, keepdim=True) # target_scores_sum is 0 for detectors seeing background
-
         # If classification head is frozen (cv3), use MEH loss only
-        if "23.cv3" in getattr(self.hyp, 'freeze', []):
+        if "23.cv3" in (getattr(self.hyp, 'freeze', None) or []):
             loss[1] = meh_loss.sum() / target_scores_sum
         else:
             loss[1] = (cls_loss_per_box.sum() + meh_loss.sum()) / target_scores_sum

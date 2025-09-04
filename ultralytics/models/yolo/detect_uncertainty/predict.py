@@ -3,7 +3,6 @@
 from ultralytics.engine.results import ResultsUncertainty
 from ultralytics.utils import ops
 from ultralytics.models.yolo.detect import DetectionPredictor
-from ultralytics.nn.modules.head import initialize_uncertainty_layers
 
 class DetectionPredictorUncertainty(DetectionPredictor):
     """
@@ -12,8 +11,6 @@ class DetectionPredictorUncertainty(DetectionPredictor):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if hasattr(self, 'model') and self.model is not None:
-            initialize_uncertainty_layers(self.model, self.args)
 
     def postprocess(self, preds, img, orig_imgs, **kwargs):
         """
