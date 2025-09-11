@@ -141,5 +141,5 @@ uncertainty_type: 'total' # (str) type of uncertainty to return, choices=['total
 uncertainty_method: 'softmax-entropy' # (str) method for uncertainty calculation, choices=['sigmoid-entropy', 'softmax-entropy', 'naive-complement']
 
 # EDL MEH loss settings ------------------------------------------------------------------------------------------------------
-edl_weight: 1.0 # (float) EDL MEH loss weight
-meh_lambda_activation_idx: 3 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]
+edl_weight: 1.5 # (float) EDL MEH loss weight
+meh_lambda_activation_idx: 2 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]

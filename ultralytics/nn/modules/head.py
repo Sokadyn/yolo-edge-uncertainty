@@ -1435,10 +1435,12 @@ class DetectEnsemble(UncertaintyMixin, Detect):
 
         if self.training:
             for i in range(self.nl):
-                # Randomly select one of the ensemble heads for training
-                j = torch.randint(self.num_ensemble_heads, (1,), device=x[i].device).item()
-                cls = self.cv3_ens[i][j](self.dropout_layer[i][j](x[i]))
-                x[i] = torch.cat((self.cv2[i](x[i]), cls), 1)
+                level_cls = []
+                for j in range(self.num_ensemble_heads):
+                    cls = self.cv3_ens[i][j](self.dropout_layer[i][j](x[i]))
+                    level_cls.append(cls)
+                avg_cls = torch.stack(level_cls, dim=0).mean(dim=0)
+                x[i] = torch.cat((self.cv2[i](x[i]), avg_cls), 1)
             return x
 
         # inference: deterministic heads (dropout disabled in eval()), compute uncertainty across members
@@ -1688,7 +1690,7 @@ class DetectMCDropout(UncertaintyMixin, Detect):
         raise NotImplementedError("Not implemented to handle uncertainty output yet.")
     
 
-class DetectEDLMEH(Detect):
+class DetectEDLMEH(UncertaintyMixin, Detect):
     """
     YOLO Detect head with Evidential Deep Learning (EDL) and Model Evidence Head (MEH).
     
@@ -1755,11 +1757,6 @@ class DetectEDLMEH(Detect):
         self.meh_lambda_activation_idx = 3 # default to aglu
         MEH_LAMBDA_ACTIVATION_NAMES = list(MEH_LAMBDA_ACTIVATIONS.keys())
         self._meh_lambda_act = MEH_LAMBDA_ACTIVATIONS[MEH_LAMBDA_ACTIVATION_NAMES[self.meh_lambda_activation_idx]]()
-        
-        # Uncertainty calculation default parameters
-        self.uncertainty_top_k = 10
-        self.uncertainty_type = 'total'
-        self.uncertainty_method = 'softmax-entropy'
 
     def set_meh_lambda_activation_idx(self, idx):
         self.meh_lambda_activation_idx = idx
@@ -1810,9 +1807,9 @@ class DetectEDLMEH(Detect):
         else:
             box, cls, meh_lambda = x_cat.split((self.reg_max * 4, self.nc, 1), 1)
         cls_t = cls.transpose(-1, -2) # [batch, detectors, classes]
-        cls_t[cls_t.isnan()] = 0.0
+        cls_t[cls_t.isnan()] = 1e-6
         meh_lambda_t = meh_lambda.transpose(-1, -2)
-        meh_lambda_t[meh_lambda_t.isnan()] = 0.0
+        meh_lambda_t[meh_lambda_t.isnan()] = 1e-6
         alphas = meh_lambda_t * cls_t.sigmoid() # [batch, detectors, classes]
         alphas = torch.clamp(alphas, min=1e-6)
         dirichlet_dist = Dirichlet(alphas)
