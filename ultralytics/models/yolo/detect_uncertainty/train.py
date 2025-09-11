@@ -35,6 +35,26 @@ class DetectionTrainerUncertainty(DetectionTrainer):
         """
         model = DetectionModelUncertainty(cfg, nc=self.data["nc"], ch=self.data["channels"], verbose=verbose and RANK == -1)
         if weights:
+            train_args = None
+            # If hyperparameters changed before training, update model accordingly
+            if hasattr(weights, 'args'):
+                train_args = weights.args.__dict__ if hasattr(weights.args, '__dict__') else weights.args
+            if train_args:
+                head = model.model[-1]
+                if hasattr(head, 'num_mc_forward_passes'):
+                    head.num_mc_forward_passes = train_args.get('num_mc_forward_passes', 10)
+                if hasattr(head, 'num_ensemble_heads'):
+                    head.num_ensemble_heads = train_args.get('num_ensemble_heads', 5)
+                if hasattr(head, 'set_meh_lambda_activation_idx'):
+                    meh_lambda = train_args.get('meh_lambda_activation_idx', 3)
+                    head.set_meh_lambda_activation_idx(meh_lambda)
+                if hasattr(head, 'set_dropout_rates'):
+                    dropout_rate = train_args.get('dropout_rate', 0.05)
+                    dropout_method_idx = train_args.get('dropout_method_idx', 0)
+                    dropblock_size = train_args.get('dropblock_size', 3)
+                    head.set_dropout_rates(dropout_rate, dropout_method_idx, dropblock_size)
+                    if verbose and RANK == -1:
+                        LOGGER.info(f"Updated model dropout: rate={dropout_rate}, method_idx={dropout_method_idx}, dropblock_size={dropblock_size}")
             model.load(weights)
         return model
 

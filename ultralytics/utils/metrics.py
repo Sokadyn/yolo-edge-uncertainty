@@ -1734,8 +1734,13 @@ class DetMetricsUncertainty(DetMetrics):
         ue_correct_per_iou = np.zeros(num_iou)
         ue_incorrect_per_iou = np.zeros(num_iou)
 
-        # Uncertainty thresholds
-        thresholds = np.arange(0.01, 10.01, 0.05)
+        unique_unc = np.unique(unc)
+        if len(unique_unc) > 500:
+            thresholds = np.quantile(unc, np.linspace(0, 1, 500))
+        else:
+            thresholds = unique_unc
+        thresholds = np.concatenate([thresholds, [0.0, np.max(unc) + 1e-6]])
+        thresholds = np.unique(thresholds)
 
         for i in range(num_iou):
             tp_i = tp[:, i]

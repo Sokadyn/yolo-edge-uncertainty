@@ -21,6 +21,7 @@ from ultralytics.nn.tasks import (
 
 from ultralytics.utils import ROOT, YAML
 from ultralytics.nn.modules.head import initialize_uncertainty_layers
+from ultralytics.nn.tasks import attempt_load_one_weight
 
 
 class YOLO(Model):
@@ -548,3 +549,61 @@ class YOLOEdgeUncertainty(YOLO):
         """
         self._update_uncertainty_params(**kwargs)
         return super().val(validator=validator, **kwargs)
+
+    def load(self, weights=None) -> "YOLOEdgeUncertainty":
+        """
+        Load parameters from the specified weights file while preserving uncertainty head parameters.
+        
+        Args:
+            weights: Path to the weights file or a weights object.
+            
+        Returns:
+            YOLOEdgeUncertainty: The instance of the class with loaded weights and preserved uncertainty parameters.
+        """
+        self._check_is_pytorch_model()
+        if isinstance(weights, (str, Path)):
+            self.overrides["pretrained"] = weights
+            weights, self.ckpt = attempt_load_one_weight(weights)
+            self._transfer_uncertainty_params_from_checkpoint(weights)
+        self.model.load(weights)
+        return self
+
+    def _transfer_uncertainty_params_from_checkpoint(self, loaded_weights):
+        """
+        Transfer uncertainty parameters from loaded checkpoint weights to current model.
+        
+        Args:
+            loaded_weights: The weights loaded from checkpoint
+        """
+        current_head = self.model.model[-1] if hasattr(self.model, 'model') else None
+        loaded_head = None
+        if hasattr(loaded_weights, 'model') and loaded_weights.model:
+            loaded_head = loaded_weights.model[-1]
+        
+        if current_head and loaded_head and hasattr(loaded_head, 'set_uncertainty_params'):
+            if hasattr(loaded_head, 'uncertainty_top_k'):
+                current_head.uncertainty_top_k = loaded_head.uncertainty_top_k
+            if hasattr(loaded_head, 'uncertainty_type'):
+                current_head.uncertainty_type = loaded_head.uncertainty_type  
+            if hasattr(loaded_head, 'uncertainty_method'):
+                current_head.uncertainty_method = loaded_head.uncertainty_method
+            if hasattr(loaded_head, 'dropout_rate'):
+                current_head.dropout_rate = loaded_head.dropout_rate
+            if hasattr(loaded_head, 'dropout_method_idx'):
+                current_head.dropout_method_idx = loaded_head.dropout_method_idx
+            if hasattr(loaded_head, 'dropblock_size'):
+                current_head.dropblock_size = loaded_head.dropblock_size
+            if hasattr(loaded_head, 'num_mc_forward_passes'):
+                current_head.num_mc_forward_passes = loaded_head.num_mc_forward_passes
+            if hasattr(loaded_head, 'num_ensemble_heads'):
+                current_head.num_ensemble_heads = loaded_head.num_ensemble_heads
+            if hasattr(loaded_head, 'meh_lambda_activation_idx'):
+                current_head.meh_lambda_activation_idx = loaded_head.meh_lambda_activation_idx
+                if hasattr(current_head, 'set_meh_lambda_activation_idx'):
+                    current_head.set_meh_lambda_activation_idx(loaded_head.meh_lambda_activation_idx)
+            if hasattr(current_head, 'set_dropout_rates') and hasattr(loaded_head, 'dropout_rate'):
+                current_head.set_dropout_rates(
+                    loaded_head.dropout_rate,
+                    getattr(loaded_head, 'dropout_method_idx', None),
+                    getattr(loaded_head, 'dropblock_size', None)
+                )
