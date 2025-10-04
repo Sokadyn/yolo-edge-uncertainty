@@ -1,8 +1,5 @@
 # BDD100K dataset converted to YOLO format with COCO80 labels
-# Path to dataset root
-path: ../datasets/bdd100k_yolo
-
-# Train/val/test image directories (relative to path)
+path: bdd100k_yolo
 train: images/train
 val: images/val
 test: images/test

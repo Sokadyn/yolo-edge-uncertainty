@@ -1,5 +1,5 @@
 # KITTI dataset configuration for YOLO, mapped to the Cityscapes dataset labels
-path: ../datasets/kitti_from_coco80  # dataset root dir. Adjust this to your actual path
+path: kitti_from_coco80  # dataset root dir. Adjust this to your actual path
 train: images/train       # train images (relative to 'path')
 val: images/val           # val images (relative to 'path')
 test:                     # test images (optional, fill in if available)
