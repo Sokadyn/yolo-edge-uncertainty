@@ -1,6 +1,6 @@
 # nuImages dataset converted to YOLO format with COCO80 labels
 # Path to dataset root
-path: ../datasets/nuimages_yolo
+path: nuimages_yolo
 
 # Train/val/test image directories (relative to path)
 train: images/train

@@ -8,7 +8,7 @@ def run_ray_tune(
     model,
     space: dict = None,
     grace_period: int = 10,
-    gpu_per_trial: int = 0.1, # set to 10 trials for 1 GPU, adjust as needed
+    gpu_per_trial: int = None,
     max_samples: int = 10,
     **train_args,
 ):

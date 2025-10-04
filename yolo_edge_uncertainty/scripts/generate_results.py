@@ -1,9 +1,8 @@
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from ultralytics import settings
-settings.update({"sync": False, "runs_dir": "interim_results"})
+settings.update({"sync": False, "runs_dir": "results"})
 from ultralytics import YOLOEdgeUncertainty, YOLO
 import torch
 import datetime
@@ -24,38 +23,29 @@ imgsz = 320 * 2
 training = True # only run validation and load pretrained models
 val_during_training = False # validation after each epoch during training for extended results
 
-def create_models():
+def model_configs():
     return {
-        "base-pretrained": {
-            "model": YOLOEdgeUncertainty('yolo11n-base-confidence.yaml'),
-            "val_kwargs": {"uncertainty_top_k": 10, "uncertainty_type": "total", "uncertainty_method": "sigmoid-complement"}
-        },
         "base-confidence": {
-            "model": YOLOEdgeUncertainty('yolo11n-base-confidence.yaml'),
-            "val_kwargs": {"uncertainty_top_k": 10, "uncertainty_type": "total", "uncertainty_method": "sigmoid-complement"}
-        },
-        "base-uncertainty": {
-            "model": YOLOEdgeUncertainty('yolo11n-base-uncertainty.yaml'),
-            "val_kwargs": {"uncertainty_top_k": 10, "uncertainty_type": "total", "uncertainty_method": "softmax-entropy"}
+            "yaml": 'yolo11n-base-confidence.yaml',
+            "val_kwargs": {"uncertainty_method": "sigmoid-complement"}
         },
         "ensemble": {
-            "model": YOLOEdgeUncertainty('yolo11n-ensemble.yaml'),
-            "val_kwargs": {"uncertainty_top_k": 10, "uncertainty_type": "total", "uncertainty_method": "sigmoid-complement"}
+            "yaml": 'yolo11n-ensemble.yaml',
+            "val_kwargs": {"uncertainty_method": "softmax-entropy"}
         },
         "mc-dropout": {
-            "model": YOLOEdgeUncertainty('yolo11n-mc-dropout.yaml'),
-            "val_kwargs": {"uncertainty_top_k": 10, "uncertainty_type": "total", "uncertainty_method": "sigmoid-complement"}
+            "yaml": 'yolo11n-mc-dropout.yaml',
+            "val_kwargs": {"uncertainty_method": "softmax-entropy"}
         },
         "edl-meh": {
-            "model": YOLOEdgeUncertainty('yolo11n-edl-meh.yaml'),
-            "val_kwargs": {"uncertainty_top_k": 10, "uncertainty_type": "total", "uncertainty_method": "softmax-entropy"}
+            "yaml": 'yolo11n-edl-meh.yaml',
+            "val_kwargs": {"uncertainty_method": "softmax-entropy"}
         },
     }
 
-folder_name = f"{script_dir}/../results/detect/data_splits_and_models"
+folder_name = f"{script_dir}/../../results/detect/data_splits_and_models"
 
 def update_results_csv(results, path, name):
-
     df = pd.DataFrame()
     for k, v in results.results_dict.items():
         df[k] = [v]
@@ -70,20 +60,21 @@ def update_results_csv(results, path, name):
     return df
 
 train_datasets = ['cityscapes-from-coco80.yaml', 'kitti-from-coco80.yaml']
-val_datasets = ['cityscapes-from-coco80.yaml', 'foggy-cityscapes-from-coco80.yaml', 'raincityscapes-from-coco80.yaml', 'kitti-from-coco80.yaml', 'bdd100k-coco80.yaml', 'nuimages-coco80.yaml']
+val_datasets = ['raincityscapes-from-coco80.yaml', 'foggy-cityscapes-from-coco80.yaml', 'bdd100k-coco80.yaml', 'nuimages-coco80.yaml']
 
 for train_dataset in train_datasets:
     train_dataset_name = os.path.splitext(os.path.basename(train_dataset))[0]
-    models = create_models()
+    models = model_configs()
     
     for name, model_config in models.items():
-        model = model_config["model"]
+        model_yaml = model_config["yaml"]
         val_kwargs = model_config["val_kwargs"]
         
         print(f"Training model {name} on {train_dataset_name}")
         train_folder_name = f"{folder_name}/train-{train_dataset_name}/yolo_{name}"
 
         if name == "base-pretrained":
+            model = YOLOEdgeUncertainty(model_yaml)
             model.load('yolo11n.pt')
         else:
             if training:
@@ -91,13 +82,28 @@ for train_dataset in train_datasets:
                 if os.path.exists(train_folder_name):
                     shutil.rmtree(train_folder_name)
                 freeze_layers = [str(x) for x in range(23)] + ["23.cv2"] + ["23.dfl"]
+                model = YOLOEdgeUncertainty(model_yaml)
                 model.load('yolo11n.pt')
-                train_results = model.train(data=train_dataset, epochs=epochs, verbose=False, plots=True, val=val_during_training, imgsz=imgsz, exist_ok=True, name=train_folder_name, device=device, fraction=fraction, rect=True, freeze=freeze_layers, box=0.0, dfl=0.0, cls=1.0)
+                train_results = model.train(
+                    data=train_dataset,
+                    epochs=epochs,
+                    verbose=False,
+                    plots=True,
+                    val=val_during_training,
+                    imgsz=imgsz,
+                    exist_ok=True,
+                    name=train_folder_name,
+                    device=device,
+                    fraction=fraction,
+                    rect=False,
+                    freeze=freeze_layers,
+                    box=0.0,
+                    dfl=0.0,
+                    cls=1.0,
+                )
                 df_train = update_results_csv(train_results, train_folder_name, name)
                 display(df_train)
-            else:
-                model = YOLOEdgeUncertainty(os.path.join(train_folder_name, 'weights', 'best.pt'))
-                model_config["model"] = model
+            model = YOLOEdgeUncertainty(os.path.join(train_folder_name, 'weights', 'best.pt'))
 
         for val_dataset in val_datasets:
             val_dataset_name = os.path.splitext(os.path.basename(val_dataset))[0]
@@ -105,6 +111,6 @@ for train_dataset in train_datasets:
             val_folder_name = f"{folder_name}/train-{train_dataset_name}/val-{val_dataset_name}/yolo_{name}"
             if os.path.exists(val_folder_name):
                 shutil.rmtree(val_folder_name)
-            val_results = model.val(data=val_dataset, imgsz=imgsz, name=val_folder_name, exist_ok=True, device=device, rect=True, **val_kwargs)
+            val_results = model.val(data=val_dataset, imgsz=imgsz, name=val_folder_name, exist_ok=True, device=device, rect=False, **val_kwargs)
             df_val = update_results_csv(val_results, val_folder_name, name)
             display(df_val)

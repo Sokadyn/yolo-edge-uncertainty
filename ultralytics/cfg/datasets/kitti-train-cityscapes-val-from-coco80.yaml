@@ -1,7 +1,7 @@
 # KITTI dataset configuration for YOLO, mapped to the Cityscapes dataset labels
-path: datasets/
-train: kitti_from_coco80/images/train       # train images (relative to 'path')
-val: cityscapes_from_coco80/images/val          # val images (relative to 'path') TODO:fix val split
+path: kitti_from_coco80
+train: images/train       # train images (relative to 'path')
+val: ../cityscapes_from_coco80/images/val          # val images (relative to 'path') TODO:fix val split
 
 
 names:

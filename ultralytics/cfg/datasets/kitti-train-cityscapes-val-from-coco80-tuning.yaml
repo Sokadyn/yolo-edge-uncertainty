@@ -1,7 +1,10 @@
-path: ../datasets/raincityscapes_from_coco80  # dataset root dir. Adjust this to your actual path
-train: images/train  # train images (relative to 'path')
-val: images/val  # val images (relative to 'path')
-test:
+# Copy of original yaml for tuning configuration
+# KITTI dataset configuration for YOLO, mapped to the Cityscapes dataset labels
+
+path: kitti
+train: images/train         # train images (relative to 'path')
+val: ../cityscapes_from_coco80/images/train          # val images (relative to 'path')
+
 
 names:
   0: person

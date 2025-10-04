@@ -1,4 +1,4 @@
-path: ../datasets/cityscapes  # dataset root dir. Adjust this to your actual path
+path: cityscapes  # dataset root dir. Adjust this to your actual path
 train: images/train  # train images (relative to 'path')
 val: images/val  # val images (relative to 'path')
 test:
