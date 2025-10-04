@@ -1475,19 +1475,19 @@ class DetectEnsemble(UncertaintyMixin, Detect):
             for x in xs:
                 ch_stacked.append(x[i])
             x_mean.append(torch.mean(torch.stack(ch_stacked), dim=0))
+        # Stack per-member outputs for aggregation
         x_cats = torch.stack([torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2) for x in xs], dim=0)
-        x_cat = torch.mean(x_cats, dim=0)
+        box_samples = x_cats[:, :, : self.reg_max * 4]
+        cls_logit_samples = x_cats[:, :, self.reg_max * 4 :]
+        x_cat_box = torch.mean(box_samples, dim=0)
+        cls_prob_mean = torch.sigmoid(cls_logit_samples).mean(dim=0)
         if self.format != "imx" and (self.dynamic or self.shape != shape):
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x_mean, self.stride, 0.5))
             self.shape = shape
-        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:
-            box = x_cat[:, : self.reg_max * 4]
-            cls = x_cat[:, self.reg_max * 4 :]
-        else:
-            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
-        # Collect multiple class probability predictions from ensemble
-        cls_samples = torch.stack([cls.transpose(-1, -2)
-                                for _, cls in (x_cat.split((self.reg_max * 4, self.nc), dim=1) for x_cat in x_cats)], dim=0)
+        box = x_cat_box
+        cls_samples = torch.stack([
+            x_cat[:, self.reg_max * 4 :].transpose(-1, -2) for x_cat in x_cats
+        ], dim=0)
         uncertainty = calc_uncertainty(cls_samples, method=self.uncertainty_method, 
                                       k=self.uncertainty_top_k, uncertainty_type=self.uncertainty_type,
                                       multi_sample=True).transpose(1, 2)  # from (batch, num_detectors, 1) to (batch, 1, num_detectors)
@@ -1501,10 +1501,10 @@ class DetectEnsemble(UncertaintyMixin, Detect):
             dbox = self.decode_bboxes(
                 self.dfl(box) * self.strides, self.anchors.unsqueeze(0) * self.strides, xywh=False
             )
-            return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1), uncertainty.permute(0, 2, 1)
+            return dbox.transpose(1, 2), cls_prob_mean.permute(0, 2, 1), uncertainty.permute(0, 2, 1)
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
-        return torch.cat((dbox, cls.sigmoid(), uncertainty), 1), x_mean
+        return torch.cat((dbox, cls_prob_mean, uncertainty), 1), x_mean
 
     def bias_init(self):
         """Initialize biases for ensemble detection heads."""
@@ -1649,21 +1649,20 @@ class DetectMCDropout(UncertaintyMixin, Detect):
         x_mean = [torch.stack([sample[i] for sample in xs], dim=0).mean(dim=0)
                 for i in range(self.nl)]          
 
+        # Stack per-pass outputs for aggregation
         x_cats = torch.stack([torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2) for x in xs], dim=0)
-        x_cat = torch.mean(x_cats, dim=0)
+        box_samples = x_cats[:, :, : self.reg_max * 4]
+        cls_logit_samples = x_cats[:, :, self.reg_max * 4 :]
+        x_cat_box = torch.mean(box_samples, dim=0)
+        cls_prob_mean = torch.sigmoid(cls_logit_samples).mean(dim=0)
         if self.format != "imx" and (self.dynamic or self.shape != shape):
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x_mean, self.stride, 0.5))
             self.shape = shape
+        box = x_cat_box
 
-        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:  # avoid TF FlexSplitV ops
-            box = x_cat[:, : self.reg_max * 4]
-            cls = x_cat[:, self.reg_max * 4 :]
-        else:
-            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
-
-        # Collect multiple class probability predictions from MC Dropout
-        cls_samples = torch.stack([cls.transpose(-1, -2) 
-                                for _, cls in (x_cat.split((self.reg_max * 4, self.nc), dim=1) for x_cat in x_cats)], dim=0)
+        cls_samples = torch.stack([
+            x_cat[:, self.reg_max * 4 :].transpose(-1, -2) for x_cat in x_cats
+        ], dim=0)
 
         uncertainty = calc_uncertainty(cls_samples, method=self.uncertainty_method, 
                                       k=self.uncertainty_top_k, uncertainty_type=self.uncertainty_type, 
@@ -1679,11 +1678,11 @@ class DetectMCDropout(UncertaintyMixin, Detect):
             dbox = self.decode_bboxes(
                 self.dfl(box) * self.strides, self.anchors.unsqueeze(0) * self.strides, xywh=False
             )
-            return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1), uncertainty.permute(0, 2, 1)
+            return dbox.transpose(1, 2), cls_prob_mean.permute(0, 2, 1), uncertainty.permute(0, 2, 1)
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
 
-        return torch.cat((dbox, cls.sigmoid(), uncertainty), 1), x_mean
+        return torch.cat((dbox, cls_prob_mean, uncertainty), 1), x_mean
     
     @staticmethod
     def postprocess(preds: torch.Tensor, max_det: int, nc: int = 80):
@@ -1754,7 +1753,8 @@ class DetectEDLMEH(UncertaintyMixin, Detect):
             self.one2one_cv3 = copy.deepcopy(self.cv3)
             self.one2one_meh_lambda = copy.deepcopy(self.meh_lambda)
 
-        self.meh_lambda_activation_idx = 3 # default to aglu
+        self.num_dirichlet_samples = 10
+        self.meh_lambda_activation_idx = 1 # default to relu
         MEH_LAMBDA_ACTIVATION_NAMES = list(MEH_LAMBDA_ACTIVATIONS.keys())
         self._meh_lambda_act = MEH_LAMBDA_ACTIVATIONS[MEH_LAMBDA_ACTIVATION_NAMES[self.meh_lambda_activation_idx]]()
 
@@ -1776,7 +1776,7 @@ class DetectEDLMEH(UncertaintyMixin, Detect):
         if self.end2end:
             return self.forward_end2end(x)
         for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i]), torch.clamp(self._meh_lambda_act(self.meh_lambda[i](x[i])), min=0.01, max=100)), 1)
+            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i]), torch.clamp(self._meh_lambda_act(self.meh_lambda[i](x[i])), min=0.001, max=1000)), 1)
         if self.training:
             return x
         y = self._inference(x)
@@ -1813,7 +1813,7 @@ class DetectEDLMEH(UncertaintyMixin, Detect):
         alphas = meh_lambda_t * cls_t.sigmoid() # [batch, detectors, classes]
         alphas = torch.clamp(alphas, min=1e-6)
         dirichlet_dist = Dirichlet(alphas)
-        samples = dirichlet_dist.sample(torch.tensor([10]))
+        samples = dirichlet_dist.sample((int(self.num_dirichlet_samples),)) # [num_samples, batch, detectors, classes]
         uncertainty = calc_uncertainty(samples, method=self.uncertainty_method, k=self.uncertainty_top_k,
                                       uncertainty_type=self.uncertainty_type, multi_sample=True).transpose(1, 2)  # from (batch, num_detectors, 1) to (batch, 1, num_detectors)
         if self.export and self.format in {"tflite", "edgetpu"}:
@@ -1852,18 +1852,24 @@ def initialize_uncertainty_layers(model, args):
     m = model.model[-1]
     class_name = m.__class__.__name__
     print(f"Initializing uncertainty layers for {class_name}...")
+
     if class_name == "DetectMCDropout":
-        m.num_mc_forward_passes = int(args.get('num_mc_forward_passes', 10))
+        m.num_mc_forward_passes = int(args.get('num_mc_forward_passes'))
+        mc_rate = args.get('mc_dropout_rate')
+        mc_method = int(args.get('mc_dropout_method_idx'))
+        mc_block = int(args.get('mc_dropblock_size'))
+        m.set_dropout_rates(mc_rate, mc_method, mc_block)
+
     if class_name == "DetectEnsemble":
-        m.num_ensemble_heads = int(args.get('num_ensemble_heads', 5))
-    if class_name == "DetectMCDropout" or class_name == "DetectEnsemble":
-        m.set_dropout_rates(
-            args.get('dropout_rate', 0.05),
-            args.get('dropout_method_idx', 0),
-            args.get('dropblock_size', 3),
-        )
+        m.num_ensemble_heads = int(args.get('num_ensemble_heads'))
+        ens_rate = args.get('ensemble_dropout_rate')
+        ens_method = int(args.get('ensemble_dropout_method_idx'))
+        ens_block = int(args.get('ensemble_dropblock_size'))
+        m.set_dropout_rates(ens_rate, ens_method, ens_block)
+
     if class_name == "DetectEDLMEH":
-        m.set_meh_lambda_activation_idx(int(args.get('meh_lambda_activation_idx', 3)))
+        m.set_meh_lambda_activation_idx(int(args.get('meh_lambda_activation_idx')))
+        m.num_dirichlet_samples = int(args.get('num_dirichlet_samples'))
     
 class ExpActivation(nn.Module):
     def forward(self, x):

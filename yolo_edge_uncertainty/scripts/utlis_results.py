@@ -6,6 +6,7 @@ from matplotlib.patches import Patch
 from dataclasses import dataclass
 from typing import Callable, Optional
 import os
+from IPython.display import display
 
 FONT_SMALL = 16
 FONT_MEDIUM = 18
@@ -66,14 +67,42 @@ class MetricCfg:
     transform: Optional[Callable[[pd.Series], pd.Series]] = None
 
 METRICS = {
-    'mAP': MetricCfg('metrics/mAP50(B)', 'mAP →', (0, 0.55), True),
-    'Precision': MetricCfg('metrics/precision(B)', 'Precision →', (0, 1.0), True),
-    'Recall': MetricCfg('metrics/recall(B)', 'Recall →', (0, 0.55), True),
-    'mUE': MetricCfg('metrics/mUE50', '← mUE', (0, 0.55), False),
-    'AUROC': MetricCfg('metrics/AUROC50', 'AUROC →', (0.5, 1.0), True),
-    'FPR95': MetricCfg('metrics/FPR95_50', '← FPR95', (0, 1.0), False),
-    'E-AURC': MetricCfg('metrics/E-AURC50', '← E-AURC', (0, 0.12), False),
-    'FPS': MetricCfg('speed_val_sum', 'FPS (@A100) →', (0, None), True, transform=lambda s: 1000.0 / s),  # ms → FPS
+    'mAP': MetricCfg('metrics/mAP50(B)', 'mAP ↑', (0, 0.55), True),
+    'Precision': MetricCfg('metrics/precision(B)', 'Precision ↑', (0, 1.0), True),
+    'Recall': MetricCfg('metrics/recall(B)', 'Recall ↑', (0, 0.55), True),
+    'mUE': MetricCfg('metrics/mUE50', 'mUE ↓', (0, 0.55), False),
+    'AUROC': MetricCfg('metrics/AUROC50', 'AUROC ↑', (0.5, 1.0), True),
+    'FPR95': MetricCfg('metrics/FPR95_50', 'FPR95 ↓', (0, 1.0), False),
+    'E-AURC': MetricCfg('metrics/E-AURC50', 'E-AURC ↓', (0, 0.12), False),
+    'FPS': MetricCfg('speed_val_sum', 'FPS@A100 ↑', (0, None), True, transform=lambda s: 1000.0 / s),  # ms ↑ FPS
+}
+
+CONFIG_LABELS = {
+    'num_mc_forward_passes': 'Number of Forward Passes',
+    'mc_dropout_rate': 'Dropout Rate',
+    'ensemble_dropout_rate': 'Dropout Rate',
+    'num_ensemble_heads': 'Ensemble Heads',
+    'edl_weight': 'EDL Weight',
+    'num_dirichlet_samples': 'Dirichlet Samples',
+    'meh_lambda_activation_idx': 'MEH Lambda Activation',
+    'mc_dropblock_size': 'DropBlock Size',
+    'ensemble_dropblock_size': 'DropBlock Size',
+    'mc_dropout_method_idx': 'Dropout Method',
+    'ensemble_dropout_method_idx': 'Dropout Method',
+    'lr0': 'Learning Rate',
+    'imgsz': 'Image Size',
+    'epochs': 'Epochs',
+}
+
+CONFIG_LABELS_LATEX = {
+    'mc_dropout_rate': r'$p_{\mathrm{drop}}^{\mathrm{mcd}}$',
+    'num_mc_forward_passes': r'$n_{\mathrm{mcd}}$',
+    'ensemble_dropout_rate': r'$p_{\mathrm{drop}}^{\mathrm{ens}}$',
+    'num_ensemble_heads': r'$n_{\mathrm{ens}}$',
+    'num_dirichlet_samples': r'$n_{\mathrm{edlmeh}}$',
+    'edl_weight': r'$w_{\mathrm{edlmeh}}$',
+    'mc_dropblock_size': r'$k_{\mathrm{dropblock}}^{\mathrm{mcd}}$',
+    'ensemble_dropblock_size': r'$k_{\mathrm{dropblock}}^{\mathrm{ens}}$',
 }
 
 def format_dataset_name(name):
@@ -151,7 +180,7 @@ def _sum_val_speed(df):
 def load_all_results(results_root, exclude_val_datasets=None, save_csvs=True,
                      include_models=None, model_rename=None):
     """
-    returns a tidy df with MultiIndex (train,val,model) and result columns,
+    returns a df with MultiIndex (train,val,model) and result columns,
     including computed 'speed_val_sum'. Optionally saves CSV files per train dataset.
     
     Args:
@@ -266,9 +295,11 @@ def color_best_worst(bars, values, higher_better):
     bars[best].set_color('lightgreen')
     bars[worst].set_color('lightcoral')
 
-def setup_axis(ax, names, values, cfg, title):
+def setup_axis(ax, names, values, cfg, title, ylim_override=None):
     ymin, ymax = cfg.ylim
-    if ymax is None:
+    if ylim_override is not None:
+        ymin, ymax = ylim_override
+    elif ymax is None:
         ymax = (max(values)*1.1) if len(values) else 1.0
     ax.set_ylim(ymin, ymax)
     ax.set_ylabel(cfg.ylabel)
@@ -308,7 +339,7 @@ def mean_by_val_across_trains(df_metric):
 
     return per_val_mean, overall
 
-def plot_single_bar(ax, data_df, cfg, title, bar_color='dimgrey'):
+def plot_single_bar(ax, data_df, cfg, title, bar_color='dimgrey', ylim_override=None):
     """Plot a single bar chart on the given axis."""
     if data_df.empty:
         ax.text(0.5, 0.5, f'{cfg.column}\nnot available', ha='center', va='center', transform=ax.transAxes)
@@ -324,7 +355,7 @@ def plot_single_bar(ax, data_df, cfg, title, bar_color='dimgrey'):
     
     bars = ax.bar(names, values, color=bar_color)
     color_best_worst(bars, values, cfg.higher_better)
-    setup_axis(ax, names, values, cfg, title)
+    setup_axis(ax, names, values, cfg, title, ylim_override=ylim_override)
 
 def add_separator_line(fig, n_main_cols, total_cols, line_color='grey'):
     """Add a vertical separator line before the last column."""
@@ -338,7 +369,7 @@ def add_common_labels(fig, title, legend_elements, legend_fontsize=FONT_MEDIUM):
     fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.995), ncol=4, fontsize=legend_fontsize)
     plt.suptitle(title, fontsize=FONT_LARGE, y=1.01)
     fig.text(0.5, -0.01, 'Validation Datasets', ha='center', va='bottom', fontsize=FONT_LARGE)
-    fig.text(-0.005, 0.5, 'Metrics (← lower is better, → higher is better)', ha='center', va='center', 
+    fig.text(-0.005, 0.5, 'Metrics (↓ lower is better, ↑ higher is better)', ha='center', va='center', 
              rotation=90, fontsize=FONT_LARGE)
 
 def create_metrics_grid(df_data, metrics, vals_list, mean_data_dict, config):
@@ -349,14 +380,30 @@ def create_metrics_grid(df_data, metrics, vals_list, mean_data_dict, config):
     for r, (mname, cfg) in enumerate(metrics.items()):
         dfm = series_for_metric(df_data, cfg)
         per_val, overall_or_mean = mean_by_val_across_trains(dfm)
+        # Compute a unified y-limit per metric row across all columns
+        unified_ylim = cfg.ylim
+        if cfg.ylim[1] is None:
+            maxima = []
+            for val in vals_list:
+                val_df = per_val.get(val, pd.DataFrame(columns=['value']))
+                if not val_df.empty and 'value' in val_df.columns:
+                    maxima.append(val_df['value'].max())
+            mean_col_df = mean_data_dict.get(mname, overall_or_mean) if mean_data_dict else overall_or_mean
+            if mean_col_df is not None and not mean_col_df.empty and 'value' in mean_col_df.columns:
+                maxima.append(mean_col_df['value'].max())
+            if len(maxima):
+                ymax = max(maxima) * 1.1
+            else:
+                ymax = 1.0
+            unified_ylim = (cfg.ylim[0], ymax)
         for c, val in enumerate(vals_list):
             ax = axs[r, c] if len(metrics) > 1 else axs[c]
             val_data = per_val.get(val, pd.DataFrame(columns=['value']))
-            plot_single_bar(ax, val_data, cfg, val, config['val_color'])
+            plot_single_bar(ax, val_data, cfg, val, config['val_color'], ylim_override=unified_ylim)
         axm = axs[r, -1] if len(metrics) > 1 else axs[-1]
         mean_col_data = mean_data_dict.get(mname, overall_or_mean) if mean_data_dict else overall_or_mean
         mean_title = config['mean_title']
-        plot_single_bar(axm, mean_col_data, cfg, mean_title, config['mean_color'])
+        plot_single_bar(axm, mean_col_data, cfg, mean_title, config['mean_color'], ylim_override=unified_ylim)
     
     add_separator_line(fig, len(vals_list), ncols, config.get('line_color', 'grey'))
     add_common_labels(fig, config['title'], config['legend_elements'], config.get('legend_fontsize', FONT_MEDIUM))
@@ -489,7 +536,7 @@ def plot_per_train_grids_split(df_all):
             'val_color': 'darkgrey',
             'mean_color': 'dimgrey',
             'mean_title': 'Mean',
-            'title': f"Metrics for YOLO11n-based Models trained on the {format_dataset_name(train)} Dataset)",
+            'title': f"Metrics for YOLO11n-based Models trained on the {format_dataset_name(train)} Dataset",
             'line_color': 'darkgrey',
             'legend_elements': [
                 Patch(facecolor='lightgreen', label='Best'),
@@ -784,3 +831,87 @@ def csv_to_latex_table(csv_path, output_path=None, precision=3, include_models=N
     print(f"💾 Saved LaTeX table: {rel}")
     
     return table_latex
+
+
+def plot_tuning_results(
+    df,
+    color_by='config/lr0',
+    metric_x='metrics/mAP50(B)',
+    metric_y='metrics/mUE50',
+    show=False,
+    use_latex_labels=True,
+):
+    """
+    Scatter plot of tuning results and update fitness columns.
+    """
+    plt.figure(figsize=(10, 6))
+
+    if 'metrics/mAP50(B)' in df.columns and 'metrics/mUE50' in df.columns:
+        df['fitness'] = (
+            df['metrics/mAP50(B)'] + (1 - df['metrics/mUE50'])
+        )
+
+    df.sort_values(by='fitness', ascending=False, inplace=True)
+
+    cols = list(df.columns)
+    fitness_cols = ['fitness'] if 'fitness' in df.columns else []
+    config_cols = [c for c in cols if isinstance(c, str) and c.startswith('config/')]
+    metric_cols = [c for c in cols if isinstance(c, str) and c.startswith('metrics/')]
+    ordered_cols = fitness_cols + config_cols + metric_cols
+    if ordered_cols:
+        df = df[ordered_cols]
+
+    if show:
+        display(df.head(5))
+
+    cmap = plt.get_cmap('viridis')
+    values = sorted(df[color_by].unique())
+    if len(values) > 10:
+        values = None
+
+    scatter = plt.scatter(
+        df[metric_x],
+        df[metric_y],
+        alpha=0.5,
+        c=df[color_by],
+        cmap='viridis',
+    )
+
+    def _fallback_title(s: str) -> str:
+        parts = s.replace('_', ' ').split()
+        acronyms = {'mc': 'MC', 'edl': 'EDL', 'meh': 'MEH'}
+        fixed = [acronyms.get(p.lower(), p.capitalize()) for p in parts]
+        return ' '.join(fixed)
+
+    def _pretty_base(label: str) -> str:
+        if isinstance(label, str) and '/' in label:
+            prefix, base = label.split('/', 1)
+            if prefix == 'config':
+                if use_latex_labels and base in CONFIG_LABELS_LATEX:
+                    return CONFIG_LABELS_LATEX[base]
+                return CONFIG_LABELS.get(base, _fallback_title(base))
+            return base
+        return label
+
+    def _metric_cfg_for_column(col: str):
+        for _, cfg in METRICS.items():
+            if cfg.column == col:
+                return cfg
+        return None
+
+    def _pretty_with_arrow(label: str) -> str:
+        base = _pretty_base(label)
+        cfg = _metric_cfg_for_column(label)
+        if cfg is not None:
+            arrow = "↑" if cfg.higher_better else "↓"
+            return f"{base} {arrow}"
+        return base
+
+    cbar = plt.colorbar(scatter, ticks=values)
+    cbar.set_label(_pretty_with_arrow(color_by))
+
+    plt.xlabel(_pretty_with_arrow(metric_x))
+    plt.ylabel(_pretty_with_arrow(metric_y))
+    plt.show()
+
+    return df

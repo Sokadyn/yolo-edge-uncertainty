@@ -41,20 +41,29 @@ class DetectionTrainerUncertainty(DetectionTrainer):
                 train_args = weights.args.__dict__ if hasattr(weights.args, '__dict__') else weights.args
             if train_args:
                 head = model.model[-1]
+                class_name = head.__class__.__name__
                 if hasattr(head, 'num_mc_forward_passes'):
-                    head.num_mc_forward_passes = train_args.get('num_mc_forward_passes', 10)
+                    head.num_mc_forward_passes = int(train_args.get('num_mc_forward_passes'))
                 if hasattr(head, 'num_ensemble_heads'):
-                    head.num_ensemble_heads = train_args.get('num_ensemble_heads', 5)
+                    head.num_ensemble_heads = int(train_args.get('num_ensemble_heads'))
                 if hasattr(head, 'set_meh_lambda_activation_idx'):
-                    meh_lambda = train_args.get('meh_lambda_activation_idx', 3)
+                    meh_lambda = int(train_args.get('meh_lambda_activation_idx'))
                     head.set_meh_lambda_activation_idx(meh_lambda)
+                if hasattr(head, 'num_dirichlet_samples'):
+                    head.num_dirichlet_samples = int(train_args.get('num_dirichlet_samples'))
                 if hasattr(head, 'set_dropout_rates'):
-                    dropout_rate = train_args.get('dropout_rate', 0.05)
-                    dropout_method_idx = train_args.get('dropout_method_idx', 0)
-                    dropblock_size = train_args.get('dropblock_size', 3)
+                    if class_name == 'DetectMCDropout':
+                        dropout_rate = train_args.get('mc_dropout_rate')
+                        dropout_method_idx = int(train_args.get('mc_dropout_method_idx'))
+                        dropblock_size = int(train_args.get('mc_dropblock_size'))
+                    elif class_name == 'DetectEnsemble':
+                        dropout_rate = train_args.get('ensemble_dropout_rate')
+                        dropout_method_idx = int(train_args.get('ensemble_dropout_method_idx'))
+                        dropblock_size = int(train_args.get('ensemble_dropblock_size'))
                     head.set_dropout_rates(dropout_rate, dropout_method_idx, dropblock_size)
                     if verbose and RANK == -1:
-                        LOGGER.info(f"Updated model dropout: rate={dropout_rate}, method_idx={dropout_method_idx}, dropblock_size={dropblock_size}")
+                        LOGGER.info(
+                            f"Updated model dropout ({class_name}): rate={dropout_rate}, method_idx={dropout_method_idx}, dropblock_size={dropblock_size}")
             model.load(weights)
         return model
 
@@ -77,3 +86,29 @@ class DetectionTrainerUncertainty(DetectionTrainer):
             "mUE50-95"
         )
 
+    def _freeze_batchnorm(self):
+        """Put all BatchNorm2d modules into eval mode and freeze affine params (always on)."""
+        model = self.model.module if isinstance(self.model, nn.parallel.DistributedDataParallel) else self.model
+        bn_layers = 0
+        frozen_params = 0
+        for m in model.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                bn_layers += 1
+                m.eval()
+                for p in m.parameters():
+                    if p.requires_grad:
+                        p.requires_grad = False
+                        frozen_params += p.numel()
+        if RANK in {-1, 0}:
+            msg = f"Freeze BN: set {bn_layers} BatchNorm2d layers to eval, froze {frozen_params} params"
+            LOGGER.info(msg)
+
+    def _model_train(self):
+        super()._model_train()
+        if getattr(self.args, 'freeze_bn', False):
+            self._freeze_batchnorm()
+
+    def _setup_train(self, world_size):
+        super()._setup_train(world_size)
+        if getattr(self.args, 'freeze_bn', False):
+            self._freeze_batchnorm()

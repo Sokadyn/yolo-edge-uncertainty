@@ -888,7 +888,7 @@ def empty_like(x):
     )
 
 
-def calc_cls_sigmoid_single_sample_uncertainty(cls_probs, k=10):
+def calc_cls_sigmoid_single_sample_uncertainty(cls_probs, k=80):
     """
     Calculate the entropy of the class probability distributions for a sigmoid vector.
 
@@ -906,7 +906,7 @@ def calc_cls_sigmoid_single_sample_uncertainty(cls_probs, k=10):
     return entropy
 
 
-def calc_cls_softmax_single_sample_uncertainty(cls_probs, k=10):
+def calc_cls_softmax_single_sample_uncertainty(cls_probs, k=80):
     """
     Calculate the entropy of the class probability distributions for a softmax vector.
 
@@ -923,7 +923,7 @@ def calc_cls_softmax_single_sample_uncertainty(cls_probs, k=10):
     return entropy
 
 
-def calc_cls_sigmoid_multi_sample_uncertainty(cls_samples, k=10, uncertainty_type='total'):
+def calc_cls_sigmoid_multi_sample_uncertainty(cls_samples, k=80, uncertainty_type='total'):
     """
     Calculate the entropy of the class probability distributions for a multi-sample vector.
 
@@ -951,7 +951,7 @@ def calc_cls_sigmoid_multi_sample_uncertainty(cls_samples, k=10, uncertainty_typ
         return total_uncertainty
 
 
-def calc_cls_softmax_multi_sample_uncertainty(cls_samples, k=10, uncertainty_type='total'):
+def calc_cls_softmax_multi_sample_uncertainty(cls_samples, k=80, uncertainty_type='total'):
     """
     Calculate the entropy of the class probability distributions for a multi-sample vector.
 
@@ -980,7 +980,7 @@ def calc_cls_softmax_multi_sample_uncertainty(cls_samples, k=10, uncertainty_typ
         return total_uncertainty
 
 
-def calc_uncertainty(cls_logits, method='softmax-entropy', k=10, uncertainty_type='total', multi_sample=False):
+def calc_uncertainty(cls_logits, method='softmax-entropy', k=80, uncertainty_type='total', multi_sample=False):
     """
     Top-level function to calculate uncertainty from class logits.
     Applies the appropriate activation function based on the method.

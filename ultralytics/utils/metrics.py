@@ -1577,20 +1577,9 @@ class MetricUncertainty(Metric):
 
     def fitness(self) -> float:
         """
-        Return uncertainty fitness as a weighted combination of detection and uncertainty metrics.
-        Where:
-            mAP50(B): self.map50
-            mAP50-95(B): self.map
-            mUE50: self.mue50
-            mUE50-95: self.mue
+        Return custom uncertainty fitness.
         """
-        # (1 - mUE) to convert uncertainty error to fitness
-        return (
-            0.05 * self.map50 +
-            0.45 * self.map +
-            0.05 * (1 - self.mue50) +
-            0.45 * (1 - self.mue)
-        )
+        return self.map50 + (1 - self.mue50)
     
     def update_uncertainty(self, ue_results: tuple) -> None:
         """

@@ -1,0 +1,12 @@
+numpy
+opencv-python
+pandas
+ipykernel
+jupyter
+matplotlib
+torch
+torchvision
+torchaudio
+scikit-learn
+seaborn
+ray[tune]

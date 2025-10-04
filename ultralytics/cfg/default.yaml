@@ -126,20 +126,28 @@ cfg: # (str, optional) for overriding defaults.yaml
 # Tracker settings ------------------------------------------------------------------------------------------------------
 tracker: botsort.yaml # (str) tracker type, choices=[botsort.yaml, bytetrack.yaml]
 
-# Uncertainty head settings -----------------------------------------------------------------------------------------------
+# Uncertainty head settings --------------------------------------------------------------------------------------------
 
-# MC Dropout (train, val) and Ensemble (train) settings
-dropout_method_idx: 0 # (int) dropout method index, choices=[0=DropBlock2D, 1=Dropout, 2=Dropout2d, 3=Dropout3d]
-dropout_rate: 0.05 # (float) dropout rate for the first dropout layer
-dropblock_size: 3 # (int) size of the DropBlock2D blocks
-num_mc_forward_passes: 10 # (int) number of Monte Carlo forward passes for uncertainty estimation
-num_ensemble_heads: 5 # (int) number of ensemble heads for uncertainty estimation
+freeze_bn: True # (bool) keep BatchNorm layers in eval mode, makes dropout heads more stable
 
 # Uncertainty calculation settings
-uncertainty_top_k: 10 # (int) number of top classes to consider for uncertainty calculation
+uncertainty_top_k: 80 # (int) number of top classes to consider for uncertainty calculation
 uncertainty_type: 'total' # (str) type of uncertainty to return, choices=['total', 'epistemic', 'aleatoric']
 uncertainty_method: 'softmax-entropy' # (str) method for uncertainty calculation, choices=['sigmoid-entropy', 'softmax-entropy', 'naive-complement']
 
-# EDL MEH loss settings ------------------------------------------------------------------------------------------------------
-edl_weight: 1.5 # (float) EDL MEH loss weight
-meh_lambda_activation_idx: 2 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]
+# MC Dropout specific settings (train, val)
+mc_dropout_method_idx: 0 # (int) MC-Dropout method index [0=DropBlock2D, 1=Dropout, 2=Dropout2d, 3=Dropout3d]
+mc_dropout_rate: 0.13 # (float) MC-Dropout rate
+mc_dropblock_size: 3     # (int) MC-Dropout DropBlock2D block size (only for DropBlock2D)
+num_mc_forward_passes: 10 # (int) number of Monte Carlo forward passes for uncertainty estimation
+
+# Ensemble specific settings (train)
+ensemble_dropout_method_idx: 0 # (int) Ensemble dropout method index [0=DropBlock2D, 1=Dropout, 2=Dropout2d, 3=Dropout3d]
+ensemble_dropout_rate: 0.05 # (float) Ensemble dropout rate
+ensemble_dropblock_size: 3  # (int) Ensemble DropBlock2D block size (only for DropBlock2D)
+num_ensemble_heads: 3 # (int) number of ensemble heads for uncertainty estimation
+
+# EDL MEH loss settings
+edl_weight: 1.0 # (float) EDL MEH loss weight
+meh_lambda_activation_idx: 1 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]
+num_dirichlet_samples: 20 # (int) number of Dirichlet samples for EDL-MEH uncertainty estimation

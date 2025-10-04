@@ -19,10 +19,10 @@ from ultralytics.nn.tasks import (
     DetectionModelUncertainty,
 )
 
-from ultralytics.utils import ROOT, YAML
+from ultralytics.utils import ROOT, YAML, LOGGER
 from ultralytics.nn.modules.head import initialize_uncertainty_layers
 from ultralytics.nn.tasks import attempt_load_one_weight
-
+import torch.nn as nn
 
 class YOLO(Model):
     """
@@ -504,6 +504,71 @@ class YOLOEdgeUncertainty(YOLO):
             if hasattr(head, 'set_uncertainty_params'):
                 head.set_uncertainty_params(**uncertainty_params)
 
+        if 'num_dirichlet_samples' in kwargs:
+            head = self.model.model[-1]
+            if hasattr(head, 'num_dirichlet_samples'):
+                head.num_dirichlet_samples = int(kwargs['num_dirichlet_samples'])
+
+    def _load(self, weights: str, task=None) -> None:
+        """
+        Override Model._load so constructing from a .pt applies the same uncertainty
+        runtime setup that `.load()` performs when starting from a YAML model.
+
+        - Keeps the loaded architecture as-is (including uncertainty heads saved in the ckpt).
+        - Re-applies uncertainty params from saved/override args to the loaded head, mirroring
+          the logic used when loading weights into a YAML-constructed model.
+        """
+        super()._load(weights, task=task)
+
+        if isinstance(weights, (str, Path)):
+            loaded_weights, _ = attempt_load_one_weight(weights)
+            self._transfer_uncertainty_params_from_checkpoint(loaded_weights)
+
+        head = getattr(self.model, 'model', [None])[-1] if hasattr(self.model, 'model') else None
+        if head is None:
+            return
+
+        args = getattr(self.model, 'args', {}) or {}
+        class_name = head.__class__.__name__
+
+        if hasattr(head, 'num_mc_forward_passes') and 'num_mc_forward_passes' in args:
+            head.num_mc_forward_passes = int(args.get('num_mc_forward_passes'))
+        if hasattr(head, 'num_ensemble_heads') and 'num_ensemble_heads' in args:
+            head.num_ensemble_heads = int(args.get('num_ensemble_heads'))
+        if hasattr(head, 'set_meh_lambda_activation_idx') and 'meh_lambda_activation_idx' in args:
+            head.set_meh_lambda_activation_idx(int(args.get('meh_lambda_activation_idx')))
+        if hasattr(head, 'num_dirichlet_samples') and 'num_dirichlet_samples' in args:
+            head.num_dirichlet_samples = int(args.get('num_dirichlet_samples'))
+
+        if hasattr(head, 'set_dropout_rates'):
+            try:
+                if class_name == 'DetectMCDropout':
+                    dr = args.get('mc_dropout_rate')
+                    dm = int(args.get('mc_dropout_method_idx')) if args.get('mc_dropout_method_idx') is not None else None
+                    db = int(args.get('mc_dropblock_size')) if args.get('mc_dropblock_size') is not None else None
+                    if dr is not None and dm is not None and db is not None:
+                        head.set_dropout_rates(dr, dm, db)
+                elif class_name == 'DetectEnsemble':
+                    dr = args.get('ensemble_dropout_rate')
+                    dm = int(args.get('ensemble_dropout_method_idx')) if args.get('ensemble_dropout_method_idx') is not None else None
+                    db = int(args.get('ensemble_dropblock_size')) if args.get('ensemble_dropblock_size') is not None else None
+                    if dr is not None and dm is not None and db is not None:
+                        head.set_dropout_rates(dr, dm, db)
+            except Exception:
+                pass
+
+        if hasattr(head, 'set_uncertainty_params'):
+            try:
+                default_method = 'sigmoid-complement' if class_name == 'DetectBaseConfidence' else args.get('uncertainty_method')
+                uncertainty_params = {
+                    'uncertainty_top_k': args.get('uncertainty_top_k'),
+                    'uncertainty_type': args.get('uncertainty_type'),
+                    'uncertainty_method': default_method,
+                }
+                head.set_uncertainty_params(**{k: v for k, v in uncertainty_params.items() if v is not None})
+            except Exception:
+                pass
+
     def train(self, trainer=None, **kwargs):
         """
         Train the model with uncertainty parameters.
@@ -513,9 +578,9 @@ class YOLOEdgeUncertainty(YOLO):
             **kwargs: Additional training arguments that can override uncertainty parameters
         """
         uncertainty_layer_params = [
-            'dropout_rate', 'dropout_method_idx', 'dropblock_size', 
-            'num_mc_forward_passes', 'num_ensemble_heads', 
-            'meh_lambda_activation_idx'
+            'mc_dropout_rate', 'mc_dropout_method_idx', 'mc_dropblock_size', 'num_mc_forward_passes',
+            'ensemble_dropout_rate', 'ensemble_dropout_method_idx', 'ensemble_dropblock_size', 'num_ensemble_heads',
+            'meh_lambda_activation_idx', 'num_dirichlet_samples'
         ]
         
         # re-initialize uncertainty layers if any relevant parameters are provided (e.g., for tuning)
@@ -526,6 +591,12 @@ class YOLOEdgeUncertainty(YOLO):
             initialize_uncertainty_layers(self.model, self.model.args)
         self._update_uncertainty_params(**kwargs)
         
+        if 'freeze_bn' in kwargs:
+            self.model.args['freeze_bn'] = bool(kwargs['freeze_bn'])
+            LOGGER.info(
+                f"Configured BN freeze: freeze_bn={self.model.args.get('freeze_bn', False)}"
+            )
+
         return super().train(trainer=trainer, **kwargs)
 
     def predict(self, source=None, **kwargs):
@@ -566,6 +637,23 @@ class YOLOEdgeUncertainty(YOLO):
             weights, self.ckpt = attempt_load_one_weight(weights)
             self._transfer_uncertainty_params_from_checkpoint(weights)
         self.model.load(weights)
+
+    def freeze_batchnorm(self) -> "YOLOEdgeUncertainty":
+        """Set all BatchNorm2d layers to eval and freeze affine params."""
+        bn_layers = 0
+        frozen_params = 0
+        for m in self.model.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                bn_layers += 1
+                m.eval()
+                for p in m.parameters():
+                    if p.requires_grad:
+                        p.requires_grad = False
+                        frozen_params += p.numel()
+        self.model.args['freeze_bn'] = True
+        LOGGER.info(
+            f"Freeze BN applied: set {bn_layers} BatchNorm2d layers to eval, froze {frozen_params} params"
+        )
         return self
 
     def _transfer_uncertainty_params_from_checkpoint(self, loaded_weights):
@@ -601,6 +689,8 @@ class YOLOEdgeUncertainty(YOLO):
                 current_head.meh_lambda_activation_idx = loaded_head.meh_lambda_activation_idx
                 if hasattr(current_head, 'set_meh_lambda_activation_idx'):
                     current_head.set_meh_lambda_activation_idx(loaded_head.meh_lambda_activation_idx)
+            if hasattr(loaded_head, 'num_dirichlet_samples'):
+                current_head.num_dirichlet_samples = getattr(loaded_head, 'num_dirichlet_samples', 10)
             if hasattr(current_head, 'set_dropout_rates') and hasattr(loaded_head, 'dropout_rate'):
                 current_head.set_dropout_rates(
                     loaded_head.dropout_rate,

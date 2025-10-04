@@ -2068,10 +2068,38 @@ class BoxesUncertainty(Boxes):
         if boxes.ndim == 1:
             boxes = boxes[None, :]
         n = boxes.shape[-1]
-        assert n in {7, 8}, f"expected 7 or 8 values but got {n}"  # xyxy, track_id, conf, cls, unc
+        assert n in {7, 8}, f"expected 7 or 8 values but got {n}"  # xyxy, [track_id], conf, cls, unc
         BaseTensor.__init__(self, boxes, orig_shape)
-        self.is_track = n == 7
+        # With uncertainty, non-tracking has 7 cols: xyxy, conf, cls, unc
+        # With tracking, there are 8 cols: xyxy, track_id, conf, cls, unc
+        self.is_track = n == 8
         self.orig_shape = orig_shape
+
+    @property
+    def conf(self) -> Union[torch.Tensor, np.ndarray]:
+        """
+        Return the confidence scores for each detection box.
+
+        For uncertainty-extended boxes the layout is:
+        - 7 cols (no tracking): [x1, y1, x2, y2, conf, cls, unc]
+        - 8 cols (with tracking): [x1, y1, x2, y2, id, conf, cls, unc]
+        In both cases confidence is located at index -3.
+        """
+        return self.data[:, -3]
+
+    @property
+    def cls(self) -> Union[torch.Tensor, np.ndarray]:
+        """
+        Return the class indices for each detection box.
+        """
+        return self.data[:, -2]
+
+    @property
+    def id(self) -> Optional[Union[torch.Tensor, np.ndarray]]:
+        """
+        Return the tracking IDs if available.
+        """
+        return self.data[:, -4] if self.is_track else None
 
     @property
     def unc(self) -> Union[torch.Tensor, np.ndarray]:
