@@ -101,21 +101,21 @@ class DetectionValidatorUncertainty(DetectionValidator):
             (List[Dict[str, torch.Tensor]]): Processed predictions after NMS, where each dict contains
                 'bboxes', 'conf', 'cls', and 'unc' tensors.
         """
-        # uncertainties and confidences before NMS
-        bs = preds[0].shape[0]
-        nc = preds[0].shape[1] - 5  # number of classes (total channels - 4 bbox - 1 unc)
-        
-        for b in range(bs):
-            class_confidences = preds[0][b, 4:4+nc, :]  # Shape: (nc, N)
-            max_conf_values = class_confidences.max(dim=0)[0]
-            conf_mask = max_conf_values > self.args.conf
-            if conf_mask.any():
-                unc_values_before_nms = preds[0][b, -1, conf_mask].cpu().numpy()
-                conf_values_before_nms = max_conf_values[conf_mask].cpu().numpy()
-                self.conf_unc_before_nms.extend(list(zip(conf_values_before_nms, unc_values_before_nms)))
-                bin_indices = np.digitize(unc_values_before_nms, self.bin_edges[:-1])
-                valid_indices = (bin_indices > 0) & (bin_indices <= len(self.uncertainty_bins_before_nms))
-                np.add.at(self.uncertainty_bins_before_nms, bin_indices[valid_indices] - 1, 1)
+        # uncertainties and confidences before NMS (only if unc_plots enabled)
+        if getattr(self.args, 'unc_plots', False):
+            bs = preds[0].shape[0]
+            nc = preds[0].shape[1] - 5  # number of classes (total channels - 4 bbox - 1 unc)
+            for b in range(bs):
+                class_confidences = preds[0][b, 4:4+nc, :]  # Shape: (nc, N)
+                max_conf_values = class_confidences.max(dim=0)[0]
+                conf_mask = max_conf_values > self.args.conf
+                if conf_mask.any():
+                    unc_values_before_nms = preds[0][b, -1, conf_mask].cpu().numpy()
+                    conf_values_before_nms = max_conf_values[conf_mask].cpu().numpy()
+                    self.conf_unc_before_nms.extend(list(zip(conf_values_before_nms, unc_values_before_nms)))
+                    bin_indices = np.digitize(unc_values_before_nms, self.bin_edges[:-1])
+                    valid_indices = (bin_indices > 0) & (bin_indices <= len(self.uncertainty_bins_before_nms))
+                    np.add.at(self.uncertainty_bins_before_nms, bin_indices[valid_indices] - 1, 1)
         
         outputs = ops.non_max_suppression(
             preds,
@@ -131,15 +131,16 @@ class DetectionValidatorUncertainty(DetectionValidator):
         
         results = [{"bboxes": x[:, :4], "conf": x[:, 4], "cls": x[:, 5], "unc": x[:, 6]} for x in outputs]
 
-        # uncertainties and confidences after NMS
-        for x in results:
-            if x["unc"].numel() > 0:
-                unc_values = x["unc"].cpu().numpy()
-                conf_values = x["conf"].cpu().numpy()
-                self.conf_unc_after_nms.extend(list(zip(conf_values, unc_values)))
-                bin_indices = np.digitize(unc_values, self.bin_edges[:-1])
-                valid_indices = (bin_indices > 0) & (bin_indices <= len(self.uncertainty_bins))
-                np.add.at(self.uncertainty_bins, bin_indices[valid_indices] - 1, 1)
+        # uncertainties and confidences after NMS (only if unc_plots enabled)
+        if getattr(self.args, 'unc_plots', False):
+            for x in results:
+                if x["unc"].numel() > 0:
+                    unc_values = x["unc"].cpu().numpy()
+                    conf_values = x["conf"].cpu().numpy()
+                    self.conf_unc_after_nms.extend(list(zip(conf_values, unc_values)))
+                    bin_indices = np.digitize(unc_values, self.bin_edges[:-1])
+                    valid_indices = (bin_indices > 0) & (bin_indices <= len(self.uncertainty_bins))
+                    np.add.at(self.uncertainty_bins, bin_indices[valid_indices] - 1, 1)
 
         return results
 
@@ -276,8 +277,9 @@ class DetectionValidatorUncertainty(DetectionValidator):
         if self.args.plots:
             for normalize in True, False:
                 self.confusion_matrix.plot(save_dir=self.save_dir, normalize=normalize, on_plot=self.on_plot)
-            self.plot_uncertainty_histogram()
-            self.plot_conf_unc_scatter()
+            if getattr(self.args, 'unc_plots', False):
+                self.plot_uncertainty_histogram()
+                self.plot_conf_unc_scatter()
         self.metrics.speed = self.speed
         self.metrics.confusion_matrix = self.confusion_matrix
 

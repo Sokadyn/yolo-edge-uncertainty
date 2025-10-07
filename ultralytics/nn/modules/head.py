@@ -162,7 +162,8 @@ class Detect(nn.Module):
         """
         # Inference path
         shape = x[0].shape  # BCHW
-        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        # Use reshape for export-compatibility
+        x_cat = torch.cat([xi.reshape(shape[0], self.no, -1) for xi in x], 2)
         if self.format != "imx" and (self.dynamic or self.shape != shape):
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
             self.shape = shape
@@ -1283,16 +1284,16 @@ class DetectBaseConfidence(UncertaintyMixin, Detect):
             return x
 
         y = self._inference(x)
-        if self.export:
-            return y
-
         cls_logits = y[:, 4:, :].transpose(1, 2)  # (batch, num_detectors, num_classes)
-        uncertainty = calc_uncertainty(cls_logits, method=self.uncertainty_method, k=self.uncertainty_top_k, 
-                                     uncertainty_type=self.uncertainty_type)
-        uncertainty = uncertainty.transpose(1, 2)  # (batch, 1, num_detectors)
+        uncertainty = calc_uncertainty(
+            cls_logits,
+            method=self.uncertainty_method,
+            k=self.uncertainty_top_k,
+            uncertainty_type=self.uncertainty_type,
+        ).transpose(1, 2)  # (batch, 1, num_detectors)
         y = torch.cat((y, uncertainty), dim=1)
 
-        return y, x
+        return y if self.export else (y, x)
     
     def forward_end2end(self, x):
         raise NotImplementedError("Not implemented to handle uncertainty output yet.")
@@ -1434,13 +1435,11 @@ class DetectEnsemble(UncertaintyMixin, Detect):
             return self.forward_end2end(x)
 
         if self.training:
+            # Pick a single ensemble member to train this step and ignore others
+            sel = torch.randint(low=0, high=self.num_ensemble_heads, size=(1,), device=x[0].device).item()
             for i in range(self.nl):
-                level_cls = []
-                for j in range(self.num_ensemble_heads):
-                    cls = self.cv3_ens[i][j](self.dropout_layer[i][j](x[i]))
-                    level_cls.append(cls)
-                avg_cls = torch.stack(level_cls, dim=0).mean(dim=0)
-                x[i] = torch.cat((self.cv2[i](x[i]), avg_cls), 1)
+                cls = self.cv3_ens[i][sel](self.dropout_layer[i][sel](x[i]))
+                x[i] = torch.cat((self.cv2[i](x[i]), cls), 1)
             return x
 
         # inference: deterministic heads (dropout disabled in eval()), compute uncertainty across members
@@ -1806,16 +1805,22 @@ class DetectEDLMEH(UncertaintyMixin, Detect):
             meh_lambda = x_cat[:, -1:]
         else:
             box, cls, meh_lambda = x_cat.split((self.reg_max * 4, self.nc, 1), 1)
-        cls_t = cls.transpose(-1, -2) # [batch, detectors, classes]
-        cls_t[cls_t.isnan()] = 1e-6
-        meh_lambda_t = meh_lambda.transpose(-1, -2)
-        meh_lambda_t[meh_lambda_t.isnan()] = 1e-6
-        alphas = meh_lambda_t * cls_t.sigmoid() # [batch, detectors, classes]
+        # Avoid transposes to simplify OpenVINO export
+        # cls: [B, nc, A], meh_lambda: [B, 1, A]
+        cls = torch.where(torch.isnan(cls), torch.full_like(cls, 1e-6), cls)
+        meh_lambda = torch.where(torch.isnan(meh_lambda), torch.full_like(meh_lambda, 1e-6), meh_lambda)
+        alphas = meh_lambda * cls.sigmoid() + 1.0  # [B, nc, A]
         alphas = torch.clamp(alphas, min=1e-6)
-        dirichlet_dist = Dirichlet(alphas)
-        samples = dirichlet_dist.sample((int(self.num_dirichlet_samples),)) # [num_samples, batch, detectors, classes]
-        uncertainty = calc_uncertainty(samples, method=self.uncertainty_method, k=self.uncertainty_top_k,
-                                      uncertainty_type=self.uncertainty_type, multi_sample=True).transpose(1, 2)  # from (batch, num_detectors, 1) to (batch, 1, num_detectors)
+        # Dirichlet-based sampling disabled per request; use vacuity u = K / S instead
+        # dirichlet_dist = Dirichlet(alphas)
+        # samples = dirichlet_dist.sample((int(self.num_dirichlet_samples),))
+        # uncertainty = calc_uncertainty(samples, method=self.uncertainty_method, k=self.uncertainty_top_k,
+        #                               uncertainty_type=self.uncertainty_type, multi_sample=True).transpose(1, 2)
+        S = torch.sum(alphas, dim=1, keepdim=True)  # # Strength per anchor [B, 1, A]
+        S = torch.clamp(S, min=1e-3)
+        K = float(self.nc)
+        u = (S.new_full(S.shape, K) / S)  # vacuity
+        uncertainty = u  # [B, 1, A]
         if self.export and self.format in {"tflite", "edgetpu"}:
             grid_h = shape[2]
             grid_w = shape[3]

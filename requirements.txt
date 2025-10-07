@@ -10,3 +10,7 @@ torchaudio
 scikit-learn
 seaborn
 ray[tune]
+tensorflow
+tensorboard
+tensorboard-data-server
+tensorboardX

@@ -53,6 +53,7 @@ max_det: 300 # (int) maximum number of detections per image
 half: False # (bool) use half precision (FP16)
 dnn: False # (bool) use OpenCV DNN for ONNX inference
 plots: True # (bool) save plots and images during train/val
+unc_plots: False # (bool) generate uncertainty-specific plots and stats (histogram, conf-unc scatter)
 
 # Predict settings -----------------------------------------------------------------------------------------------------
 source: # (str, optional) source directory for images or videos
@@ -143,11 +144,11 @@ num_mc_forward_passes: 10 # (int) number of Monte Carlo forward passes for uncer
 
 # Ensemble specific settings (train)
 ensemble_dropout_method_idx: 0 # (int) Ensemble dropout method index [0=DropBlock2D, 1=Dropout, 2=Dropout2d, 3=Dropout3d]
-ensemble_dropout_rate: 0.05 # (float) Ensemble dropout rate
+ensemble_dropout_rate: 0.1 # (float) Ensemble dropout rate
 ensemble_dropblock_size: 3  # (int) Ensemble DropBlock2D block size (only for DropBlock2D)
 num_ensemble_heads: 3 # (int) number of ensemble heads for uncertainty estimation
 
 # EDL MEH loss settings
-edl_weight: 1.0 # (float) EDL MEH loss weight
+edl_weight: 2.5 # (float) EDL MEH loss weight
 meh_lambda_activation_idx: 1 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]
 num_dirichlet_samples: 20 # (int) number of Dirichlet samples for EDL-MEH uncertainty estimation

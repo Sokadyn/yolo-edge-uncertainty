@@ -520,9 +520,13 @@ class YOLOEdgeUncertainty(YOLO):
         """
         super()._load(weights, task=task)
 
+        # Only attempt to parse a PyTorch checkpoint to transfer uncertainty params if the
+        # provided weights are a .pt file. Non-.pt formats (e.g., .onnx)
         if isinstance(weights, (str, Path)):
-            loaded_weights, _ = attempt_load_one_weight(weights)
-            self._transfer_uncertainty_params_from_checkpoint(loaded_weights)
+            suffix = str(weights).rpartition(".")[-1].lower()
+            if suffix == "pt":
+                loaded_weights, _ = attempt_load_one_weight(weights)
+                self._transfer_uncertainty_params_from_checkpoint(loaded_weights)
 
         head = getattr(self.model, 'model', [None])[-1] if hasattr(self.model, 'model') else None
         if head is None:
@@ -568,6 +572,8 @@ class YOLOEdgeUncertainty(YOLO):
                 head.set_uncertainty_params(**{k: v for k, v in uncertainty_params.items() if v is not None})
             except Exception:
                 pass
+            # we load weights again in case setting uncertainty params modified the head (ensemble mostly)
+            super()._load(weights, task=task)
 
     def train(self, trainer=None, **kwargs):
         """

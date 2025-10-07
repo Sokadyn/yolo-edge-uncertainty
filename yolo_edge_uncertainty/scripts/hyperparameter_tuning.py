@@ -29,7 +29,7 @@ def run_tuning(method_name: str, model_yaml: str, search_space: dict):
         exist_ok=True,
         data="cityscapes-train-kitti-val-from-coco80-tuning.yaml",
         epochs=12,
-        iterations=150,
+        iterations=100,
         imgsz=320 * 2,
         space=search_space,
         use_ray=True,
@@ -91,21 +91,18 @@ def run_tuning(method_name: str, model_yaml: str, search_space: dict):
 
 
 ensemble_space = {
-    #"ensemble_dropblock_size": tune.choice([3, 5, 7]),
     "ensemble_dropout_rate": tune.uniform(0.0, 0.5),
     "num_ensemble_heads": tune.choice([3, 5, 7, 9]),
 }
 
 mc_dropout_space = {
-    #"mc_dropblock_size": tune.choice([3, 5, 7]),
     "mc_dropout_rate": tune.uniform(0.0, 0.5),
     "num_mc_forward_passes": tune.choice([5, 10, 15, 20]),
 }
 
 edl_meh_space = {
-    #"meh_lambda_activation_idx": tune.choice([0, 1, 2, 3]),
+    "meh_lambda_activation_idx": tune.choice([0, 1, 2, 3]),
     "edl_weight": tune.uniform(0.1, 5.0),
-    "num_dirichlet_samples": tune.choice([5, 10, 15, 20])
 }
 
 if __name__ == "__main__":
