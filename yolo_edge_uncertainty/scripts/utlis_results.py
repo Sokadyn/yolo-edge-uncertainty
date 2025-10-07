@@ -2,6 +2,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator, AutoMinorLocator
 from matplotlib.patches import Patch
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -22,10 +23,10 @@ plt.rcParams.update({
     'figure.figsize': (16, 8),
 })
 
+Y_TICKS_NBINS = 6 # Default number of major y-axis ticks to aim for in bar plots
 DEFAULT_MODEL_SELECTION = [
     'Baseline', 'Ensemble', 'MC Dropout', 'EDL MEH'
 ]
-
 MODEL_ORDER_PRETTY = [
     'Base Pretrained', 'Baseline', 'Base Uncertainty',
     'Ensemble', 'MC Dropout', 'EDL MEH'
@@ -81,7 +82,7 @@ CONFIG_LABELS = {
     'num_mc_forward_passes': 'Number of Forward Passes',
     'mc_dropout_rate': 'Dropout Rate',
     'ensemble_dropout_rate': 'Dropout Rate',
-    'num_ensemble_heads': 'Ensemble Heads',
+    'num_ensemble_heads': 'Ensemble Members',
     'edl_weight': 'EDL Weight',
     'num_dirichlet_samples': 'Dirichlet Samples',
     'meh_lambda_activation_idx': 'MEH Lambda Activation',
@@ -92,6 +93,13 @@ CONFIG_LABELS = {
     'lr0': 'Learning Rate',
     'imgsz': 'Image Size',
     'epochs': 'Epochs',
+}
+
+MEH_LAMBDA_ACTIVATION_INDEX_TO_NAME = {
+    0: 'Exp.',
+    1: 'ReLU',
+    2: 'Softplus',
+    3: 'AGLU',
 }
 
 CONFIG_LABELS_LATEX = {
@@ -166,9 +174,10 @@ def get_csv_dir() -> Path:
     return csv_dir
 
 def save_figure(fig, filename, dpi=300):
-    """Save figure to the figures directory with multiple formats."""
+    """Save figure to the figures directory (tight bbox) as PNG and PDF."""
     figures_dir = get_figures_dir()
     base_name = Path(filename).stem
+    plt.tight_layout()
     fig.savefig(figures_dir / f'{base_name}.png', dpi=dpi, bbox_inches='tight')
     fig.savefig(figures_dir / f'{base_name}.pdf', bbox_inches='tight')
     print(f"📁 Saved figure: {base_name}.png and {base_name}.pdf")
@@ -306,6 +315,11 @@ def setup_axis(ax, names, values, cfg, title, ylim_override=None):
     ax.set_title(format_dataset_name(title))
     ax.set_xticks(range(len(names)))
     ax.set_xticklabels(names, rotation=45, ha='right')
+    try:
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=Y_TICKS_NBINS))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    except Exception:
+        pass
 
 def series_for_metric(df_all, cfg):
     """
@@ -840,6 +854,10 @@ def plot_tuning_results(
     metric_y='metrics/mUE50',
     show=False,
     use_latex_labels=True,
+    save=True,
+    filename: Optional[str] = None,
+    dpi: int = 600,
+    marker_size: int = 180,
 ):
     """
     Scatter plot of tuning results and update fitness columns.
@@ -864,18 +882,80 @@ def plot_tuning_results(
     if show:
         display(df.head(5))
 
-    cmap = plt.get_cmap('viridis')
-    values = sorted(df[color_by].unique())
-    if len(values) > 10:
-        values = None
+    def _resolve_metric_col(name: str) -> str:
+        if name in df.columns:
+            return name
+        base = name.strip()
+        if base in METRICS:
+            return METRICS[base].column
+        return name
 
-    scatter = plt.scatter(
-        df[metric_x],
-        df[metric_y],
-        alpha=0.5,
-        c=df[color_by],
-        cmap='viridis',
-    )
+    metric_x_resolved = _resolve_metric_col(metric_x)
+    metric_y_resolved = _resolve_metric_col(metric_y)
+
+    cmap = plt.get_cmap('viridis')
+    col_series = pd.Series(df[color_by]).dropna()
+    values_numeric = None
+    try:
+        values_numeric = np.array(sorted(col_series.astype(float).unique()))
+        is_numeric = True
+    except Exception:
+        is_numeric = False
+
+    is_int_like = bool(is_numeric and np.allclose(values_numeric, np.round(values_numeric)))
+    use_discrete = bool(is_int_like and len(values_numeric) > 0 and len(values_numeric) <= 10)
+
+    if use_discrete:
+        from matplotlib.colors import ListedColormap, BoundaryNorm
+        cats = values_numeric
+        colors = cmap(np.linspace(0, 1, len(cats)))
+        d_cmap = ListedColormap(colors)
+        if len(cats) == 1:
+            v = float(cats[0])
+            bounds = np.array([v - 0.5, v + 0.5])
+        else:
+            mids = (cats[:-1] + cats[1:]) / 2.0
+            first = cats[0] - (cats[1] - cats[0]) / 2.0
+            last = cats[-1] + (cats[-1] - cats[-2]) / 2.0
+            bounds = np.concatenate([[first], mids, [last]])
+        norm = BoundaryNorm(bounds, d_cmap.N)
+        scatter = plt.scatter(
+            df[metric_x_resolved],
+            df[metric_y_resolved],
+            alpha=0.5,
+            c=df[color_by],
+            s=marker_size,
+            cmap=d_cmap,
+            norm=norm,
+        )
+        cbar = plt.colorbar(scatter, boundaries=bounds, ticks=cats, spacing='uniform')
+        # For EDL-MEH activation index, label ticks with activation names rotated 90°
+        if isinstance(color_by, str) and color_by.endswith('meh_lambda_activation_idx'):
+            labels = [
+                MEH_LAMBDA_ACTIVATION_INDEX_TO_NAME.get(int(v), str(int(v)) if float(v).is_integer() else str(v))
+                for v in cats
+            ]
+            try:
+                tick_fs = FONT_LARGE
+                cbar.ax.set_yticklabels(labels, rotation=90)
+                cbar.ax.tick_params(axis='y', labelsize=tick_fs)
+                for tick in cbar.ax.get_yticklabels():
+                    tick.set_va('center')
+            except Exception:
+                pass
+    else:
+        values = sorted(col_series.unique())
+        if len(values) > 10:
+            values = None
+        scatter = plt.scatter(
+            df[metric_x_resolved],
+            df[metric_y_resolved],
+            alpha=0.5,
+            c=df[color_by],
+            s=marker_size,
+            cmap='viridis',
+        )
+        cbar = plt.colorbar(scatter, ticks=values)
 
     def _fallback_title(s: str) -> str:
         parts = s.replace('_', ' ').split()
@@ -894,24 +974,75 @@ def plot_tuning_results(
         return label
 
     def _metric_cfg_for_column(col: str):
-        for _, cfg in METRICS.items():
+        for name, cfg in METRICS.items():
             if cfg.column == col:
-                return cfg
-        return None
+                return name, cfg
+        return None, None
 
     def _pretty_with_arrow(label: str) -> str:
-        base = _pretty_base(label)
-        cfg = _metric_cfg_for_column(label)
+        name, cfg = _metric_cfg_for_column(label)
         if cfg is not None:
+            base = name  # use short metric alias like 'mAP', 'mUE', 'FPS'
             arrow = "↑" if cfg.higher_better else "↓"
             return f"{base} {arrow}"
-        return base
+        return _pretty_base(label)
 
-    cbar = plt.colorbar(scatter, ticks=values)
-    cbar.set_label(_pretty_with_arrow(color_by))
+    def _colorbar_label(label: str) -> str:
+        # Force fully written labels for config/* regardless of LaTeX setting
+        if isinstance(label, str) and '/' in label:
+            prefix, base = label.split('/', 1)
+            if prefix == 'config':
+                return CONFIG_LABELS.get(base, _fallback_title(base))
+        return _pretty_with_arrow(label)
 
-    plt.xlabel(_pretty_with_arrow(metric_x))
-    plt.ylabel(_pretty_with_arrow(metric_y))
+    cbar.set_label(_colorbar_label(color_by))
+    plt.xlabel(_pretty_with_arrow(metric_x_resolved))
+    plt.ylabel(_pretty_with_arrow(metric_y_resolved))
+
+    if save:
+        def _sanitize(s: str) -> str:
+            return (
+                str(s)
+                .replace('/', '_')
+                .replace(' ', '_')
+                .replace('(', '')
+                .replace(')', '')
+                .replace('[', '')
+                .replace(']', '')
+                .replace('{', '')
+                .replace('}', '')
+            )
+        base = filename or f"tuning_{_sanitize(color_by)}_{_sanitize(metric_x_resolved)}_vs_{_sanitize(metric_y_resolved)}"
+        save_figure(plt.gcf(), base, dpi=dpi)
+
     plt.show()
 
     return df
+
+
+def plot_tuning_mue_map(
+    df,
+    color_by: str = 'config/lr0',
+    show: bool = False,
+    use_latex_labels: bool = True,
+    save: bool = True,
+    filename: Optional[str] = None,
+    dpi: int = 600,
+    marker_size: int = 60,
+):
+    """Convenience wrapper to plot mAP vs mUE for tuning results.
+
+    X-axis: mAP50(B), Y-axis: mUE50, colored by a config hyperparameter.
+    """
+    return plot_tuning_results(
+        df,
+        color_by=color_by,
+        metric_x='mAP',
+        metric_y='mUE',
+        show=show,
+        use_latex_labels=use_latex_labels,
+        save=save,
+        filename=filename,
+        dpi=dpi,
+        marker_size=marker_size,
+    )

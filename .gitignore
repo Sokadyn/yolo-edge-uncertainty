@@ -185,3 +185,4 @@ logs/
 yolo_edge_uncertainty/figures/
 yolo_edge_uncertainty/csv/
 yolo_edge_uncertainty/tables/
+.venv2/
