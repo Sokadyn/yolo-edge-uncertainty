@@ -162,7 +162,8 @@ class Detect(nn.Module):
         """
         # Inference path
         shape = x[0].shape  # BCHW
-        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        # Use reshape for export-compatibility
+        x_cat = torch.cat([xi.reshape(shape[0], self.no, -1) for xi in x], 2)
         if self.format != "imx" and (self.dynamic or self.shape != shape):
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
             self.shape = shape
@@ -1804,22 +1805,22 @@ class DetectEDLMEH(UncertaintyMixin, Detect):
             meh_lambda = x_cat[:, -1:]
         else:
             box, cls, meh_lambda = x_cat.split((self.reg_max * 4, self.nc, 1), 1)
-        cls_t = cls.transpose(-1, -2) # [batch, detectors, classes]
-        cls_t[cls_t.isnan()] = 1e-6
-        meh_lambda_t = meh_lambda.transpose(-1, -2)
-        meh_lambda_t[meh_lambda_t.isnan()] = 1e-6
-        alphas = meh_lambda_t * cls_t.sigmoid() +1.0 # [batch, detectors, classes]
+        # Avoid transposes to simplify OpenVINO export
+        # cls: [B, nc, A], meh_lambda: [B, 1, A]
+        cls = torch.where(torch.isnan(cls), torch.full_like(cls, 1e-6), cls)
+        meh_lambda = torch.where(torch.isnan(meh_lambda), torch.full_like(meh_lambda, 1e-6), meh_lambda)
+        alphas = meh_lambda * cls.sigmoid() + 1.0  # [B, nc, A]
         alphas = torch.clamp(alphas, min=1e-6)
         # Dirichlet-based sampling disabled per request; use vacuity u = K / S instead
         # dirichlet_dist = Dirichlet(alphas)
         # samples = dirichlet_dist.sample((int(self.num_dirichlet_samples),))
         # uncertainty = calc_uncertainty(samples, method=self.uncertainty_method, k=self.uncertainty_top_k,
         #                               uncertainty_type=self.uncertainty_type, multi_sample=True).transpose(1, 2)
-        S = torch.sum(alphas, dim=-1, keepdim=True)  # [batch, detectors, 1]
+        S = torch.sum(alphas, dim=1, keepdim=True)  # # Strength per anchor [B, 1, A]
         S = torch.clamp(S, min=1e-3)
         K = float(self.nc)
         u = (S.new_full(S.shape, K) / S)  # vacuity
-        uncertainty = u.transpose(1, 2)  # [batch, 1, num_detectors]
+        uncertainty = u  # [B, 1, A]
         if self.export and self.format in {"tflite", "edgetpu"}:
             grid_h = shape[2]
             grid_w = shape[3]
