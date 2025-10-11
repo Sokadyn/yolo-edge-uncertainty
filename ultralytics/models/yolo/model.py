@@ -483,7 +483,6 @@ class YOLOEdgeUncertainty(YOLO):
             default_method = 'sigmoid-complement' if head.__class__.__name__ == 'DetectBaseConfidence' else self.model.args.get('uncertainty_method')
             
             uncertainty_params = {
-                'uncertainty_top_k': self.model.args.get('uncertainty_top_k'),
                 'uncertainty_type': self.model.args.get('uncertainty_type'),
                 'uncertainty_method': default_method
             }
@@ -496,7 +495,7 @@ class YOLOEdgeUncertainty(YOLO):
         Args:
             **kwargs: Keyword arguments that may contain uncertainty parameters
         """
-        uncertainty_method_params = ['uncertainty_top_k', 'uncertainty_type', 'uncertainty_method']
+        uncertainty_method_params = ['uncertainty_type', 'uncertainty_method']
         
         if any(k in kwargs for k in uncertainty_method_params):
             uncertainty_params = {k: v for k, v in kwargs.items() if k in uncertainty_method_params}
@@ -565,7 +564,6 @@ class YOLOEdgeUncertainty(YOLO):
             try:
                 default_method = 'sigmoid-complement' if class_name == 'DetectBaseConfidence' else args.get('uncertainty_method')
                 uncertainty_params = {
-                    'uncertainty_top_k': args.get('uncertainty_top_k'),
                     'uncertainty_type': args.get('uncertainty_type'),
                     'uncertainty_method': default_method,
                 }
@@ -675,8 +673,6 @@ class YOLOEdgeUncertainty(YOLO):
             loaded_head = loaded_weights.model[-1]
         
         if current_head and loaded_head and hasattr(loaded_head, 'set_uncertainty_params'):
-            if hasattr(loaded_head, 'uncertainty_top_k'):
-                current_head.uncertainty_top_k = loaded_head.uncertainty_top_k
             if hasattr(loaded_head, 'uncertainty_type'):
                 current_head.uncertainty_type = loaded_head.uncertainty_type  
             if hasattr(loaded_head, 'uncertainty_method'):

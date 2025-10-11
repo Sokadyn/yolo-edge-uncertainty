@@ -1241,14 +1241,11 @@ class UncertaintyMixin:
         """Initialize uncertainty parameters with defaults."""
         super().__init__(*args, **kwargs)
         # Set default uncertainty parameters
-        self.uncertainty_top_k = 10 # take only top k class scores for uncertainty calculation
         self.uncertainty_type = 'total' # 'aleatoric', 'epistemic', 'total'
         self.uncertainty_method = 'softmax-entropy' # 'softmax-entropy', 'sigmoid-entropy', 'sigmoid-complement'
 
-    def set_uncertainty_params(self, uncertainty_top_k=None, uncertainty_type=None, uncertainty_method=None):
+    def set_uncertainty_params(self, uncertainty_type=None, uncertainty_method=None):
         """Set uncertainty calculation parameters dynamically."""
-        if uncertainty_top_k is not None:
-            self.uncertainty_top_k = uncertainty_top_k
         if uncertainty_type is not None:
             self.uncertainty_type = uncertainty_type
         if uncertainty_method is not None:
@@ -1288,7 +1285,6 @@ class DetectBaseConfidence(UncertaintyMixin, Detect):
         uncertainty = calc_uncertainty(
             cls_logits,
             method=self.uncertainty_method,
-            k=self.uncertainty_top_k,
             uncertainty_type=self.uncertainty_type,
         ).transpose(1, 2)  # (batch, 1, num_detectors)
         y = torch.cat((y, uncertainty), dim=1)
@@ -1336,7 +1332,7 @@ class DetectBaseUncertainty(UncertaintyMixin, Detect):
             return y
 
         cls_logits = y[: , 4:, :].transpose(1, 2)  # (batch, num_detectors, num_classes)
-        uncertainty = calc_uncertainty(cls_logits, method=self.uncertainty_method, k=self.uncertainty_top_k,
+        uncertainty = calc_uncertainty(cls_logits, method=self.uncertainty_method,
                                  uncertainty_type=self.uncertainty_type)
         uncertainty = uncertainty.transpose(1, 2)  # (batch, 1, num_detectors)
         y = torch.cat((y, uncertainty), dim=1)
@@ -1487,8 +1483,7 @@ class DetectEnsemble(UncertaintyMixin, Detect):
         cls_samples = torch.stack([
             x_cat[:, self.reg_max * 4 :].transpose(-1, -2) for x_cat in x_cats
         ], dim=0)
-        uncertainty = calc_uncertainty(cls_samples, method=self.uncertainty_method, 
-                                      k=self.uncertainty_top_k, uncertainty_type=self.uncertainty_type,
+        uncertainty = calc_uncertainty(cls_samples, method=self.uncertainty_method, uncertainty_type=self.uncertainty_type,
                                       multi_sample=True).transpose(1, 2)  # from (batch, num_detectors, 1) to (batch, 1, num_detectors)
         if self.export and self.format in {"tflite", "edgetpu"}:
             grid_h = shape[2]
@@ -1663,8 +1658,7 @@ class DetectMCDropout(UncertaintyMixin, Detect):
             x_cat[:, self.reg_max * 4 :].transpose(-1, -2) for x_cat in x_cats
         ], dim=0)
 
-        uncertainty = calc_uncertainty(cls_samples, method=self.uncertainty_method, 
-                                      k=self.uncertainty_top_k, uncertainty_type=self.uncertainty_type, 
+        uncertainty = calc_uncertainty(cls_samples, method=self.uncertainty_method, uncertainty_type=self.uncertainty_type, 
                                       multi_sample=True).transpose(-1, -2)
         
         if self.export and self.format in {"tflite", "edgetpu"}:
@@ -1814,7 +1808,7 @@ class DetectEDLMEH(UncertaintyMixin, Detect):
         # Dirichlet-based sampling disabled per request; use vacuity u = K / S instead
         # dirichlet_dist = Dirichlet(alphas)
         # samples = dirichlet_dist.sample((int(self.num_dirichlet_samples),))
-        # uncertainty = calc_uncertainty(samples, method=self.uncertainty_method, k=self.uncertainty_top_k,
+        # uncertainty = calc_uncertainty(samples, method=self.uncertainty_method,
         #                               uncertainty_type=self.uncertainty_type, multi_sample=True).transpose(1, 2)
         S = torch.sum(alphas, dim=1, keepdim=True)  # # Strength per anchor [B, 1, A]
         S = torch.clamp(S, min=1e-3)

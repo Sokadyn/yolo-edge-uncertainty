@@ -28,7 +28,7 @@ def run_tuning(method_name: str, model_yaml: str, search_space: dict):
         name=folder_name,
         exist_ok=True,
         data="cityscapes-train-kitti-val-from-coco80-tuning.yaml",
-        epochs=12,
+        epochs=50,
         iterations=100,
         imgsz=320 * 2,
         space=search_space,
@@ -36,13 +36,19 @@ def run_tuning(method_name: str, model_yaml: str, search_space: dict):
         rect=False,
         save=False,
         fraction=1.0,
-        grace_period=3,
+        grace_period=10,
         gpu_per_trial=0.1,
         val=False,
         freeze=[str(x) for x in range(23)] + ["23.cv2", "23.dfl"],
         box=0.0,
         dfl=0.0,
-        cls=1.0
+        cls=1.0,
+        optimizer="SGD",
+        lr0=0.001,
+        lrf=0.001,
+        momentum=0.9,
+        weight_decay=5e-4,
+        batch=16,
     )
 
     # Save all results

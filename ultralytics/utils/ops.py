@@ -888,25 +888,22 @@ def empty_like(x):
     )
 
 
-def calc_cls_sigmoid_single_sample_uncertainty(cls_probs, k=80):
+def calc_cls_sigmoid_single_sample_uncertainty(cls_probs):
     """
     Calculate the entropy of the class probability distributions for a sigmoid vector.
 
     Args:
         cls_probs (torch.Tensor): Class probabilities with shape (batch_size, num_classes, num_detectors).
-        k (int): Number of top classes to consider for uncertainty calculation.
 
     Returns:
         torch.Tensor: Entropy values with shape (batch_size, 1, num_detectors).
     """
-    k = min(k, cls_probs.size(1))
-    topv, topi = torch.topk(cls_probs, k, dim=1)      # (B, k, D)
-    entropy = -torch.sum((topv * torch.log2(topv + 1e-6) +
-                          (1 - topv) * torch.log2(1 - topv + 1e-6)), dim=1, keepdim=True)
+    entropy = -torch.sum((cls_probs * torch.log2(cls_probs + 1e-6) +
+                          (1 - cls_probs) * torch.log2(1 - cls_probs + 1e-6)), dim=1, keepdim=True)
     return entropy
 
 
-def calc_cls_softmax_single_sample_uncertainty(cls_probs, k=80):
+def calc_cls_softmax_single_sample_uncertainty(cls_probs):
     """
     Calculate the entropy of the class probability distributions for a softmax vector.
 
@@ -916,30 +913,24 @@ def calc_cls_softmax_single_sample_uncertainty(cls_probs, k=80):
     Returns:
         torch.Tensor: Entropy values with shape (batch_size, 1, num_detectors).
     """
-    k = min(k, cls_probs.size(1))
-    topv, topi = torch.topk(cls_probs, k, dim=1)      # (S,B,D,k)
-    cls_probs = topv / topv.sum(dim=1, keepdim=True).clamp_min(1e-6)
     entropy = -torch.sum(cls_probs * torch.log2(cls_probs + 1e-6), dim=1, keepdim=True)
     return entropy
 
 
-def calc_cls_sigmoid_multi_sample_uncertainty(cls_samples, k=80, uncertainty_type='total'):
+def calc_cls_sigmoid_multi_sample_uncertainty(cls_samples, uncertainty_type='total'):
     """
     Calculate the entropy of the class probability distributions for a multi-sample vector.
 
     Args:
         cls_samples (torch.Tensor): Class probabilities (sigmoid) with shape (num_samples, batch, num_detectors, num_classes).
-        k (int): Number of top classes to consider for uncertainty calculation.
         uncertainty_type (str): Type of uncertainty to return ('total', 'epistemic', 'aleatoric').
 
     Returns:
         torch.Tensor: Entropy values with shape (batch, 1, num_detectors).
     """
-    k = min(k, cls_samples.size(-1))
-    topv, topi = torch.topk(cls_samples, k, dim=-1)      # (S, B, D, k)
-    avg = topv.mean(dim=0)
+    avg = cls_samples.mean(dim=0)
     total_uncertainty = (-avg * (avg + 1e-6).log2() - (1 - avg) * (1 - avg + 1e-6).log2()).sum(dim=-1, keepdim=True)
-    entropy = (-topv * (topv + 1e-6).log2() - (1 - topv) * (1 - topv + 1e-6).log2()).sum(dim=-1) 
+    entropy = (-cls_samples * (cls_samples + 1e-6).log2() - (1 - cls_samples) * (1 - cls_samples + 1e-6).log2()).sum(dim=-1) 
     aleatoric_uncertainty = entropy.mean(dim=0).unsqueeze(-1)
     epistemic_uncertainty = total_uncertainty - aleatoric_uncertainty
     
@@ -951,24 +942,20 @@ def calc_cls_sigmoid_multi_sample_uncertainty(cls_samples, k=80, uncertainty_typ
         return total_uncertainty
 
 
-def calc_cls_softmax_multi_sample_uncertainty(cls_samples, k=80, uncertainty_type='total'):
+def calc_cls_softmax_multi_sample_uncertainty(cls_samples, uncertainty_type='total'):
     """
     Calculate the entropy of the class probability distributions for a multi-sample vector.
 
     Args:
         cls_samples (torch.Tensor): Class probabilities (softmax) with shape (num_samples, batch, num_detectors, num_classes).
-        k (int): Number of top classes to consider for uncertainty calculation.
         uncertainty_type (str): Type of uncertainty to return ('total', 'epistemic', 'aleatoric').
 
     Returns:
         torch.Tensor: Entropy values with shape (batch, num_detectors, 1).
     """
-    k = min(k, cls_samples.size(-1))
-    topv, topi = torch.topk(cls_samples, k, dim=-1)      # (S,B,D,k)
-    cls_samples = topv / topv.sum(dim=-1, keepdim=True).clamp_min(1e-6)
     avg = cls_samples.mean(dim=0)
     total_uncertainty = (-avg * (avg + 1e-6).log2()).sum(dim=-1, keepdim=True)
-    entropy = (-cls_samples * (cls_samples + 1e-6).log2()).sum(dim=-1) 
+    entropy = (-cls_samples * (cls_samples + 1e-6).log2()).sum(dim=-1)
     aleatoric_uncertainty = entropy.mean(dim=0).unsqueeze(-1)
     epistemic_uncertainty = total_uncertainty - aleatoric_uncertainty
     
@@ -980,7 +967,7 @@ def calc_cls_softmax_multi_sample_uncertainty(cls_samples, k=80, uncertainty_typ
         return total_uncertainty
 
 
-def calc_uncertainty(cls_logits, method='softmax-entropy', k=80, uncertainty_type='total', multi_sample=False):
+def calc_uncertainty(cls_logits, method='softmax-entropy', uncertainty_type='total', multi_sample=False):
     """
     Top-level function to calculate uncertainty from class logits.
     Applies the appropriate activation function based on the method.
@@ -990,7 +977,6 @@ def calc_uncertainty(cls_logits, method='softmax-entropy', k=80, uncertainty_typ
                                   Single sample: (batch_size, num_detectors, num_classes)
                                   Multi sample: (num_samples, batch_size, num_detectors, num_classes)
         method (str): Uncertainty calculation method. Choices: ['sigmoid-entropy', 'softmax-entropy', 'sigmoid-complement']
-        k (int): Number of top class scores to consider for uncertainty calculation (avoid skewing from too many labels (e.g., coco80)).
         uncertainty_type (str): Type of uncertainty to return (if applicable). Choices: ['total', 'epistemic', 'aleatoric']
         multi_sample (bool): Whether input contains multiple samples per detector.
     
@@ -1009,18 +995,18 @@ def calc_uncertainty(cls_logits, method='softmax-entropy', k=80, uncertainty_typ
     elif method == 'sigmoid-entropy':
         cls_probs = torch.sigmoid(cls_logits)
         if multi_sample:
-            return calc_cls_sigmoid_multi_sample_uncertainty(cls_probs, k=k, uncertainty_type=uncertainty_type)
+            return calc_cls_sigmoid_multi_sample_uncertainty(cls_probs, uncertainty_type=uncertainty_type)
         else:
             cls_probs_old = cls_probs.transpose(1, 2)
-            result = calc_cls_sigmoid_single_sample_uncertainty(cls_probs_old, k=k)
+            result = calc_cls_sigmoid_single_sample_uncertainty(cls_probs_old)
             return result.transpose(1, 2)
     elif method == 'softmax-entropy':
         cls_probs = F.softmax(cls_logits, dim=-1)
         if multi_sample:
-            return calc_cls_softmax_multi_sample_uncertainty(cls_probs, k=k, uncertainty_type=uncertainty_type)
+            return calc_cls_softmax_multi_sample_uncertainty(cls_probs, uncertainty_type=uncertainty_type)
         else:
             cls_probs_old = cls_probs.transpose(1, 2)
-            result = calc_cls_softmax_single_sample_uncertainty(cls_probs_old, k=k)
+            result = calc_cls_softmax_single_sample_uncertainty(cls_probs_old)
             return result.transpose(1, 2)
     else:
         raise ValueError(f"Unknown uncertainty method: {method}. Choices: ['sigmoid-entropy', 'softmax-entropy', 'sigmoid-complement']")
