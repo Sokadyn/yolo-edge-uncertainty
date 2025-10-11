@@ -16,7 +16,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 normal_repr = torch.Tensor.__repr__
 torch.Tensor.__repr__ = lambda self: f"{self.shape}_{normal_repr(self)}"
 
-epochs = 25
+epochs = 100
 fraction = 1.0
 device = '0'
 imgsz = 320 * 2
@@ -43,7 +43,7 @@ def model_configs():
         },
     }
 
-folder_name = f"{script_dir}/../../results/detect/data_splits_and_models"
+folder_name = f"{script_dir}/../../results/detect_check/data_splits_and_models"
 
 def update_results_csv(results, path, name):
     df = pd.DataFrame()
@@ -100,6 +100,12 @@ for train_dataset in train_datasets:
                     box=0.0,
                     dfl=0.0,
                     cls=1.0,
+                    optimizer="SGD",
+                    lr0=0.001,
+                    lrf=0.001,
+                    momentum=0.9,
+                    weight_decay=5e-4,
+                    batch=16,
                 )
                 df_train = update_results_csv(train_results, train_folder_name, name)
                 display(df_train)

@@ -2,26 +2,30 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator, AutoMinorLocator
+from matplotlib.ticker import MaxNLocator, AutoMinorLocator, FuncFormatter
 from matplotlib.patches import Patch
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 import os
 from IPython.display import display
 
 FONT_SMALL = 16
 FONT_MEDIUM = 18
 FONT_LARGE = 20
-plt.rcParams.update({
-    'font.size': FONT_LARGE,
-    'axes.labelsize': FONT_MEDIUM,
-    'xtick.labelsize': FONT_SMALL,
-    'ytick.labelsize': FONT_SMALL,
-    'legend.fontsize': FONT_SMALL,
-    'figure.titlesize': FONT_MEDIUM,
-    'axes.titlesize': FONT_MEDIUM,
-    'figure.figsize': (16, 8),
-})
+
+def update_matplotlib_defaults():
+    plt.rcParams.update({
+        'font.size': FONT_LARGE,
+        'axes.labelsize': FONT_MEDIUM,
+        'xtick.labelsize': FONT_SMALL,
+        'ytick.labelsize': FONT_SMALL,
+        'legend.fontsize': FONT_SMALL,
+        'figure.titlesize': FONT_MEDIUM,
+        'axes.titlesize': FONT_MEDIUM,
+        'figure.figsize': (16, 8),
+    })
+
+update_matplotlib_defaults()
 
 Y_TICKS_NBINS = 6 # Default number of major y-axis ticks to aim for in bar plots
 DEFAULT_MODEL_SELECTION = [
@@ -181,6 +185,81 @@ def save_figure(fig, filename, dpi=300):
     fig.savefig(figures_dir / f'{base_name}.png', dpi=dpi, bbox_inches='tight')
     fig.savefig(figures_dir / f'{base_name}.pdf', bbox_inches='tight')
     print(f"📁 Saved figure: {base_name}.png and {base_name}.pdf")
+
+def _pretty_model_name_from_raw(raw: str) -> str:
+    """Map raw identifiers (with optional 'yolo_' prefix) to pretty names.
+
+    Examples:
+      'yolo_mc-dropout' -> 'MC Dropout'
+      'ensemble' -> 'Ensemble'
+    """
+    if not isinstance(raw, str):
+        return str(raw)
+    base = raw.strip()
+    if base.startswith('yolo_'):
+        base = base[len('yolo_'):]
+    return MODEL_RENAME.get(base, base)
+
+def plot_benchmark_fps(csv_path: Optional[Union[Path, str]] = None,
+                       save_basename: str = 'benchmark_fps',
+                       title: Optional[str] = None,
+                       include_ok_only: bool = True,
+                       sort_desc: bool = False,
+                       dpi: int = 300) -> pd.DataFrame:
+    """Read a simple benchmark CSV and save a bar plot of FPS for 4 approaches.
+    Returns:
+        A DataFrame with columns ['Model','FPS'] used for the plot.
+    """
+    if csv_path is None:
+        csv_path = get_csv_dir() / 'benchmark_inference_time_onnx.csv'
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Benchmark CSV not found: {csv_path}")
+
+    df = pd.read_csv(csv_path, encoding='utf-8-sig')
+    required_cols = {'Model', 'FPS'}
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"CSV missing required columns: {missing}; present: {list(df.columns)}")
+
+    if include_ok_only and 'Status❔' in df.columns:
+        df = df[df['Status❔'] == '✅'].copy()
+
+    df['Model'] = df['Model'].apply(_pretty_model_name_from_raw)
+
+    desired = order_models(df['Model'])
+    df = df[df['Model'].isin(desired)].copy()
+
+    if sort_desc:
+        df = df.sort_values('FPS', ascending=False)
+    else:
+        df['__order'] = df['Model'].apply(lambda x: desired.index(x) if x in desired else 999)
+        df = df.sort_values('__order').drop(columns='__order')
+
+    fig, ax = plt.subplots()
+    names = df['Model'].tolist()
+    values = df['FPS'].astype(float).tolist()
+    bars = ax.bar(names, values, color='dimgrey')
+    color_best_worst(bars, values, higher_better=True)
+
+    cfg_like = MetricCfg(column='FPS', ylabel='FPS ↑', ylim=(0, None), higher_better=True)
+    setup_axis(ax, names, values, cfg_like, title or 'Inference Speed (FPS)')
+    ax.set_title('')
+    # rotation of x labels 0
+    ax.set_xticklabels(names, rotation=0, ha='center')
+    for b, v in zip(bars, values):
+        try:
+            label = f"{float(v):.2f}"
+        except Exception:
+            label = str(v)
+        ax.text(b.get_x() + b.get_width()/2.0, b.get_height(), label,
+                ha='center', va='bottom', fontsize=FONT_LARGE + 4)
+    plt.tight_layout()
+
+    save_figure(fig, save_basename, dpi=dpi)
+    plt.show()
+
+    return df[['Model', 'FPS']]
 
 def _sum_val_speed(df):
     speed_cols = [c for c in df.columns if 'speed' in c if not 'loss' in c] # inference speed only
@@ -998,6 +1077,18 @@ def plot_tuning_results(
     cbar.set_label(_colorbar_label(color_by))
     plt.xlabel(_pretty_with_arrow(metric_x_resolved))
     plt.ylabel(_pretty_with_arrow(metric_y_resolved))
+
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+
+    if not (isinstance(color_by, str) and color_by.endswith('meh_lambda_activation_idx')):
+        try:
+            cbar.locator = MaxNLocator(nbins=4)
+            cbar.formatter = FuncFormatter(lambda v, p: (f"{v:.2f}".rstrip('0').rstrip('.')))
+            cbar.update_ticks()
+        except Exception:
+            pass
 
     if save:
         def _sanitize(s: str) -> str:

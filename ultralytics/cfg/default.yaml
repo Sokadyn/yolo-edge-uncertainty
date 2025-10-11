@@ -132,22 +132,21 @@ tracker: botsort.yaml # (str) tracker type, choices=[botsort.yaml, bytetrack.yam
 freeze_bn: True # (bool) keep BatchNorm layers in eval mode, makes dropout heads more stable
 
 # Uncertainty calculation settings
-uncertainty_top_k: 80 # (int) number of top classes to consider for uncertainty calculation
 uncertainty_type: 'total' # (str) type of uncertainty to return, choices=['total', 'epistemic', 'aleatoric']
 uncertainty_method: 'softmax-entropy' # (str) method for uncertainty calculation, choices=['sigmoid-entropy', 'softmax-entropy', 'naive-complement']
 
 # MC Dropout specific settings (train, val)
 mc_dropout_method_idx: 0 # (int) MC-Dropout method index [0=DropBlock2D, 1=Dropout, 2=Dropout2d, 3=Dropout3d]
-mc_dropout_rate: 0.13 # (float) MC-Dropout rate
-mc_dropblock_size: 3     # (int) MC-Dropout DropBlock2D block size (only for DropBlock2D)
-num_mc_forward_passes: 10 # (int) number of Monte Carlo forward passes for uncertainty estimation
+mc_dropout_rate: 0.34 # (float) MC-Dropout rate
+mc_dropblock_size: 7     # (int) MC-Dropout DropBlock2D block size (only for DropBlock2D)
+num_mc_forward_passes: 15 # (int) number of Monte Carlo forward passes for uncertainty estimation
 
 # Ensemble specific settings (train)
 ensemble_dropout_method_idx: 0 # (int) Ensemble dropout method index [0=DropBlock2D, 1=Dropout, 2=Dropout2d, 3=Dropout3d]
-ensemble_dropout_rate: 0.1 # (float) Ensemble dropout rate
-ensemble_dropblock_size: 3  # (int) Ensemble DropBlock2D block size (only for DropBlock2D)
+ensemble_dropout_rate: 0.13 # (float) Ensemble dropout rate
+ensemble_dropblock_size: 7  # (int) Ensemble DropBlock2D block size (only for DropBlock2D)
 num_ensemble_heads: 3 # (int) number of ensemble heads for uncertainty estimation
-
+-
 # EDL MEH loss settings
 edl_weight: 2.5 # (float) EDL MEH loss weight
 meh_lambda_activation_idx: 1 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]
