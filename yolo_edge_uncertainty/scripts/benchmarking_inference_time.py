@@ -52,6 +52,7 @@ def run_benchmarks(models: dict, imgsz: int = 640, data: str = "raincityscapes-f
 def main():
     parser = argparse.ArgumentParser(description="Benchmark inference time for Cityscapes-trained models")
     parser.add_argument("--device", default="cpu", help="Device to run benchmarks on, e.g. 'cpu', '0'")
+    parser.add_argument("--name", default="", help="Name for the benchmark run")
     args = parser.parse_args()
 
     fmt = "onnx"  # "pytorch"  # "openvino" # "onnx"
@@ -59,7 +60,7 @@ def main():
     results = run_benchmarks(models, fmt=fmt, device=args.device)
     out_dir = Path("yolo_edge_uncertainty/csv")
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / f"benchmark_inference_time_{fmt}.csv"
+    out_file = out_dir / f"benchmark_inference_time_{fmt}_device_{args.device}_{args.name}.csv"
     results.to_csv(out_file, index=False)
     print(f"Saved aggregated benchmarks to {out_file}")
 
