@@ -146,7 +146,7 @@ ensemble_dropout_method_idx: 0 # (int) Ensemble dropout method index [0=DropBloc
 ensemble_dropout_rate: 0.13 # (float) Ensemble dropout rate
 ensemble_dropblock_size: 7  # (int) Ensemble DropBlock2D block size (only for DropBlock2D)
 num_ensemble_heads: 3 # (int) number of ensemble heads for uncertainty estimation
--
+
 # EDL MEH loss settings
 edl_weight: 2.5 # (float) EDL MEH loss weight
 meh_lambda_activation_idx: 1 # (int) Index for selecting predefined MEH lambda activations [0=exp, 1=relu, 2=softplus, 3=aglu]
