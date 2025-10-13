@@ -43,7 +43,7 @@ def model_configs():
         },
     }
 
-folder_name = f"{script_dir}/../../results/detect_check/data_splits_and_models"
+folder_name = f"{script_dir}/../../results/detect/data_splits_and_models"
 
 def update_results_csv(results, path, name):
     df = pd.DataFrame()
