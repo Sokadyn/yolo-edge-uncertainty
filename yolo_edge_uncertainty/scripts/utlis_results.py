@@ -82,6 +82,24 @@ METRICS = {
     'FPS': MetricCfg('speed_val_sum', 'FPS@A100 ↑', (0, None), True, transform=lambda s: 1000.0 / s),  # ms ↑ FPS
 }
 
+def _base_metric_name(label: str) -> str:
+    """Extract base metric name from a display label.
+
+    Handles both 'mAP [↑]' and 'mAP ↑' formats (and analogous for ↓),
+    returning 'mAP'. Falls back gracefully for non-strings.
+    """
+    if not isinstance(label, str):
+        return str(label)
+    s = label.strip()
+    # Remove bracketed arrows first
+    s = s.replace(' [↑]', '').replace(' [↓]', '')
+    # Then remove plain arrows without brackets
+    s = s.replace(' ↑', '').replace(' ↓', '')
+    # Fallback: strip at first ' [' if any leftover
+    if ' [' in s:
+        s = s.split(' [', 1)[0]
+    return s
+
 CONFIG_LABELS = {
     'num_mc_forward_passes': 'Number of Forward Passes',
     'mc_dropout_rate': 'Dropout Rate',
@@ -117,6 +135,15 @@ CONFIG_LABELS_LATEX = {
     'ensemble_dropblock_size': r'$k_{\mathrm{dropblock}}^{\mathrm{ens}}$',
 }
 
+# Optional discrete search spaces for config parameters used in tuning plots.
+# These ensure colorbar ticks reflect the full intended search space, not just
+# the values present in a particular filtered dataframe.
+DISCRETE_TICK_VALUES = {
+    'config/num_ensemble_heads': [3, 5, 7, 9],
+    'config/num_mc_forward_passes': [5, 10, 15, 20],
+    'config/meh_lambda_activation_idx': [0, 1, 2, 3],
+}
+
 def format_dataset_name(name):
     """Pretty-print raw dataset identifier to human-readable name (no abbreviations)."""
     return (name.replace('-from-coco80', '')
@@ -125,7 +152,7 @@ def format_dataset_name(name):
                 .title()
                 .replace('Raincityscapes', 'RainCityscapes')
                 .replace('Nuimages', 'nuImages')
-                .replace('Bdd100K', 'BDD100k')
+                .replace('Bdd100K', 'BDD100K')
                 .replace('Kitti', 'KITTI'))
 
 def _abbr_dataset_pretty_name(pretty: str) -> str:
@@ -703,7 +730,8 @@ def _get_train_info(df):
     
     train_name = df['train'].iloc[0]
     formatted_train = format_dataset_name(train_name)
-    return f"trained on {formatted_train} dataset"
+    # Prefer natural phrasing with article 'the'
+    return f"trained on the {formatted_train} dataset"
 
 def _get_metric_mapping(df):
     """Get mapping from metric columns to display names with arrows."""
@@ -711,7 +739,8 @@ def _get_metric_mapping(df):
     for metric_name, cfg in METRICS.items():
         if cfg.column in df.columns:
             arrow = "↑" if cfg.higher_better else "↓"
-            mapping[cfg.column] = f"{metric_name} [{arrow}]"
+            # Display arrow without square brackets in LaTeX table headers
+            mapping[cfg.column] = f"{metric_name} {arrow}"
     return mapping
 
 def _apply_transforms_and_rename(df, metric_mapping):
@@ -719,7 +748,7 @@ def _apply_transforms_and_rename(df, metric_mapping):
     df = df[list(metric_mapping.keys())].copy()
     
     for col, display_name in metric_mapping.items():
-        original_name = display_name.split(' [')[0]
+        original_name = _base_metric_name(display_name)
         cfg = METRICS[original_name]
         if cfg.transform:
             df[col] = cfg.transform(df[col])
@@ -730,7 +759,7 @@ def _format_and_bold(df, precision):
     """Format values and bold the best ones."""
     df_str = df.copy().astype(str)
     for col in df.columns:
-        base_name = col.split(' [')[0]
+        base_name = _base_metric_name(col)
         prec = 1 if base_name == 'FPS' else precision
         for idx in df.index:
             df_str.loc[idx, col] = f"{df.loc[idx, col]:.{prec}f}"
@@ -738,7 +767,7 @@ def _format_and_bold(df, precision):
         for val_dataset in df.index.get_level_values(0).unique():
             val_data = df.loc[val_dataset]
             for col in df.columns:
-                original_name = col.split(' [')[0]
+                original_name = _base_metric_name(col)
                 cfg = METRICS[original_name]
                 best_idx = val_data[col].idxmax() if cfg.higher_better else val_data[col].idxmin()
                 best_val = val_data.loc[best_idx, col]
@@ -746,7 +775,7 @@ def _format_and_bold(df, precision):
                 df_str.loc[(val_dataset, best_idx), col] = f"\\textbf{{{best_val:.{prec}f}}}"
     else:
         for col in df.columns:
-            original_name = col.split(' [')[0]
+            original_name = _base_metric_name(col)
             cfg = METRICS[original_name]
             best_idx = df[col].idxmax() if cfg.higher_better else df[col].idxmin()
             best_val = df.loc[best_idx, col]
@@ -837,15 +866,15 @@ def csv_to_latex_table(csv_path, output_path=None, precision=3, include_models=N
             ordered_models = [m for m in ordered_models if m in include_set]
         
         desired_metric_order = ['mAP', 'Precision', 'Recall', 'FPS', 'mUE', 'AUROC', 'FPR95', 'E-AURC']
-        base_to_col = {col.split(' [')[0]: col for col in df.columns}
+        base_to_col = {_base_metric_name(col): col for col in df.columns}
         ordered_metric_cols = [base_to_col[m] for m in desired_metric_order if m in base_to_col]
 
         df_pivoted_list = []
         for metric_col in ordered_metric_cols:
-            metric_name = metric_col.split(' [')[0]
+            metric_name = _base_metric_name(metric_col)
             cfg = METRICS[metric_name]
             arrow = "↑" if cfg.higher_better else "↓"
-            metric_display = f"{metric_name} [{arrow}]"
+            metric_display = f"{metric_name} {arrow}"
             df_metric = df[metric_col].reset_index()
             df_metric['val'] = df_metric['val'].map(val_mapping)
             df_metric = df_metric.pivot(index='model', columns='val', values=metric_col)
@@ -860,7 +889,7 @@ def csv_to_latex_table(csv_path, output_path=None, precision=3, include_models=N
         df_formatted = df.copy().astype(str)
         for metric_label in df.index.get_level_values('Metric').unique():
             metric_data = df.loc[metric_label]
-            base_metric_name = str(metric_label).split(' [')[0]
+            base_metric_name = _base_metric_name(str(metric_label))
             cfg = METRICS[base_metric_name]
             prec = 1 if base_metric_name == 'FPS' else precision
             
@@ -899,7 +928,10 @@ def csv_to_latex_table(csv_path, output_path=None, precision=3, include_models=N
     )
     
     if "trained on" in train_info and "dataset" in train_info:
-        dataset_part = train_info.split("trained on ")[1].split(" dataset")[0].lower().replace(" ", "_")
+        dataset_part = train_info.split("trained on ")[1].split(" dataset")[0].strip()
+        if dataset_part.lower().startswith("the "):
+            dataset_part = dataset_part[4:]
+        dataset_part = dataset_part.lower().replace(" ", "_")
         label = f"tab:results_{dataset_part}"
     else:
         label = "tab:results_mean"
@@ -986,7 +1018,11 @@ def plot_tuning_results(
 
     if use_discrete:
         from matplotlib.colors import ListedColormap, BoundaryNorm
-        cats = values_numeric
+        # Use full search space if known to keep ticks accurate
+        if isinstance(color_by, str) and color_by in DISCRETE_TICK_VALUES:
+            cats = np.array(sorted(DISCRETE_TICK_VALUES[color_by]), dtype=float)
+        else:
+            cats = values_numeric
         colors = cmap(np.linspace(0, 1, len(cats)))
         d_cmap = ListedColormap(colors)
         if len(cats) == 1:
@@ -1008,6 +1044,13 @@ def plot_tuning_results(
             norm=norm,
         )
         cbar = plt.colorbar(scatter, boundaries=bounds, ticks=cats, spacing='uniform')
+        # For discrete integer categories, show tick labels as integers
+        try:
+            int_labels = [int(v) if float(v).is_integer() else v for v in cats]
+            cbar.set_ticks(cats)
+            cbar.set_ticklabels(int_labels)
+        except Exception:
+            pass
         # For EDL-MEH activation index, label ticks with activation names rotated 90°
         if isinstance(color_by, str) and color_by.endswith('meh_lambda_activation_idx'):
             labels = [
@@ -1082,7 +1125,7 @@ def plot_tuning_results(
     ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
-    if not (isinstance(color_by, str) and color_by.endswith('meh_lambda_activation_idx')):
+    if not use_discrete and not (isinstance(color_by, str) and color_by.endswith('meh_lambda_activation_idx')):
         try:
             cbar.locator = MaxNLocator(nbins=4)
             cbar.formatter = FuncFormatter(lambda v, p: (f"{v:.2f}".rstrip('0').rstrip('.')))
