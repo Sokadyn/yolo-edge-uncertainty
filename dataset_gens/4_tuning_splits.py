@@ -9,6 +9,13 @@ Output:
     Creates train.txt and val.txt files in the KITTI dataset directory
 """
 
+# Precondition folder structure
+# ..
+# └── datasets/
+#     └── kitti_from_coco80/
+#         └── images/
+#             └── train/
+
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

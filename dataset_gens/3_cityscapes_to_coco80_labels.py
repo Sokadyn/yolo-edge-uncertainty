@@ -14,6 +14,35 @@ Output:
     - Creates similar directory structures for foggy and RainCityscapes datasets with updated labels.
 """
 
+# Precondition folder structure
+# ..
+# └── datasets/
+#     ├── cityscapes/
+#     │   ├── images/
+#     │   │   ├── train/*.png
+#     │   │   ├── val/*.png
+#     │   │   └── test/*.png
+#     │   ├── labels/
+#     │   │   ├── train/*.txt
+#     │   │   └── val/*.txt
+#     │   └── annotations/
+#     │       ├── instancesonly_filtered_gtFine_train.json
+#     │       └── instancesonly_filtered_gtFine_val.json
+#     ├── foggy_cityscapes/
+#     │   ├── images/
+#     │   │   ├── train/*.png
+#     │   │   └── val/*.png
+#     │   └── labels/
+#     │       ├── train/*.txt
+#     │       └── val/*.txt
+#     └── raincityscapes/
+#         ├── images/
+#         │   ├── train/*.png
+#         │   └── val/*.png
+#         └── labels/
+#             ├── train/*.txt
+#             └── val/*.txt
+
 import os
 import json
 import shutil

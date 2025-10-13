@@ -5,12 +5,36 @@ Usage:
     python3 5_nuimages_to_yolo.py
 
 Requirements:
-    - nuImages dataset should be located at '../datasets/nuimages'
+    - nuImages dataset should be located at '../datasets/nuimages' (download it manually)
 
 Output:
     - Converts nuImages to YOLO format in '../datasets/nuimages_yolo'
     - Creates train/val/test splits with COCO80 label mapping
 """
+
+# Precondition folder structure
+# ..
+# └── datasets/
+#     └── nuimages/
+#         ├── samples/
+#         │   └── .../*.jpg
+#         └── labels/
+#             ├── v1.0-train/
+#             │   ├── category.json
+#             │   ├── sample_data.json
+#             │   └── object_ann.json
+#             ├── v1.0-val/
+#             │   ├── category.json
+#             │   ├── sample_data.json
+#             │   └── object_ann.json
+#             ├── v1.0-test/
+#             │   ├── category.json
+#             │   ├── sample_data.json
+#             │   └── object_ann.json
+#             └── v1.0-mini/
+#                 ├── category.json
+#                 ├── sample_data.json
+#                 └── object_ann.json
 
 import os
 import json
