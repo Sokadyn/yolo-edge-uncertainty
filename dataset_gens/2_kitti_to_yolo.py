@@ -14,6 +14,17 @@ References:
     - https://gist.github.com/nikvaessen/20f29642cc23a1f45f41e7cc507acb7a#file-split1_trainl-txt
 """
 
+# Precondition folder structure
+# ..
+# └── datasets/
+#     └── kitti/
+#         ├── images/
+#         │   └── training/
+#         │       └── image_2/
+#         └── labels/
+#             └── training/
+#                 └── label_2/
+
 import cv2
 import yaml
 import os

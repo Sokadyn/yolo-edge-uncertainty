@@ -5,12 +5,27 @@ Usage:
     python3 5_bdd100k_to_yolo.py
 
 Requirements:
-    - BDD100K dataset should be located at '../datasets/bdd/100k'
+    - BDD100K dataset should be located at '../datasets/bdd/100k' (download it manually)
 
 Output:
     - Converts BDD100K to YOLO format in '../datasets/bdd100k_yolo'
     - Creates train/val/test splits with COCO80 label mapping
 """
+
+# Precondition folder structure
+# ..
+# └── datasets/
+#     └── bdd/
+#         ├── 100k/
+#         │   └── images/
+#         │       ├── train/*.jpg
+#         │       ├── val/*.jpg
+#         │       └── test/*.jpg
+#         └── labels/
+#             └── 100k/
+#                 ├── train/*.json
+#                 ├── val/*.json
+#                 └── test/*.json
 
 import os
 import json
@@ -24,7 +39,6 @@ datasets_dir = os.path.join(os.path.dirname(script_dir), 'datasets')
 bdd100k_dir = os.path.join(datasets_dir, 'bdd', '100k')
 output_dir = os.path.join(datasets_dir, 'bdd100k_yolo')
 
-# BDD100K category to COCO80 mapping
 BDD_TO_COCO80 = {
     'person': 0,
     'car': 2,

@@ -11,6 +11,17 @@ Output:
     - A new directory '../datasets/kitti_from_cityscapes' containing updated labels and copied images in Cityscapes format.
 """
 
+# Precondition folder structure
+# ..
+# └── datasets/
+#     └── kitti/
+#         ├── images/
+#         │   ├── train/*.png
+#         │   └── val/*.png
+#         └── labels/
+#             ├── train/*.txt
+#             └── val/*.txt
+
 import os
 import shutil
 import yaml

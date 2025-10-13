@@ -14,6 +14,26 @@ Output:
     (Similar structure for foggy and rain datasets)
 """
 
+# Precondition folder structure
+# ..
+# └── datasets/
+#     ├── cityscapes/
+#     │   ├── leftImg8bit/
+#     │   │   ├── train/<city>/*_leftImg8bit.png
+#     │   │   ├── val/<city>/*_leftImg8bit.png
+#     │   │   └── test/<city>/*_leftImg8bit.png
+#     │   └── annotations/
+#     │       ├── instancesonly_filtered_gtFine_train.json
+#     │       └── instancesonly_filtered_gtFine_val.json
+#     ├── foggy_cityscapes/
+#     │   └── leftImg8bit_foggyDBF/
+#     │       ├── train/<city>/*_leftImg8bit_foggy_*.png
+#     │       └── val/<city>/*_leftImg8bit_foggy_*.png
+#     └── raincityscapes/
+#         └── leftImg8bit_rain/
+#             ├── train/<city>/*_leftImg8bit_rain_*.png
+#             └── val/<city>/*_leftImg8bit_rain_*.png
+
 
 import os
 import json
