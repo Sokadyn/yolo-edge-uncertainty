@@ -7,6 +7,23 @@
 A comprehensive extension of Ultralytics YOLO that adds real-time uncertainty estimation capabilities for edge deployment scenarios. This framework provides multiple uncertainty estimation methods while focusing on minimizing computational overhead, making it suitable for resource-constrained environments. 
 The framework is an experimental state, not ready for any production use.
 
+## Environment
+
+Use Python 3.10.12 and a virtual environment. Install the package and dependencies as follows:
+
+```
+python3 -m venv env
+source env/bin/activate
+pip install --upgrade pip wheel setuptools
+pip install -e .
+pip install -r requirements.txt
+```
+
+Hardware used for our experiments:
+- AMD EPYC 9354P 32-Core Processor
+- 500 GB RAM
+- NVIDIA A100 GPU
+
 ## 📋 Methods Used
 
 ### 1. **Base Confidence**
