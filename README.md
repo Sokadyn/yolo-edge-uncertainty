@@ -1,5 +1,7 @@
 # Increasing Trustworthiness of Edge AI by Adding Uncertainty Estimation to Object Detection
 
+This repository contains the experiments for the corresponding [Diploma Thesis](https://repositum.tuwien.at/handle/20.500.12708/221805).
+
 ## YOLO Edge Uncertainty Framework (Ultralytics Fork)
 
 > Fork of [Ultralytics YOLO](README_Original.md) with additional uncertainty estimation for object detection.

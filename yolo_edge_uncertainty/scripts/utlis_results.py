@@ -281,6 +281,15 @@ def plot_benchmark_fps(csv_path: Optional[Union[Path, str]] = None,
             label = str(v)
         ax.text(b.get_x() + b.get_width()/2.0, b.get_height(), label,
                 ha='center', va='bottom', fontsize=FONT_LARGE + 4)
+    # Add legend for Best/Worst/Others (matching bar colors)
+    legend_elements = [
+        Patch(facecolor='lightgreen', label='Best'),
+        Patch(facecolor='lightcoral', label='Worst'),
+        Patch(facecolor='dimgrey', label='Others'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper center',
+              bbox_to_anchor=(0.5, 1.15), ncol=3, frameon=True, fontsize=FONT_LARGE)
+
     plt.tight_layout()
 
     save_figure(fig, save_basename, dpi=dpi)
@@ -718,6 +727,89 @@ def create_extended_barplots(df_all, plot_per_train=False):
 
     if plot_per_train:
         plot_per_train_grids_split(df_all)
+
+def create_mean_row_barplots(df_all,
+                             filename_part1: str = "overall_mean_row_part1",
+                             filename_part2: str = "overall_mean_row_part2",
+                             dpi: int = 300,
+                             fig_height: float = 6.0,
+                             font_scale: float = 1.0):
+    """Create two figures showing only the overall mean across all validation datasets.
+
+    - Figure 1 (1x4): mAP, Precision, Recall, FPS
+    - Figure 2 (1x4): mUE, AUROC, FPR95, E-AURC
+
+    The mean is computed by first averaging across training datasets per validation
+    dataset (if multiple trains exist), then averaging those per-validation means
+    across all validation datasets. Bars are ordered per `order_models` and best/worst
+    bars are highlighted.
+
+    Args:
+        df_all: DataFrame with MultiIndex (train, val, model) and metric columns.
+        filename_part1: Base filename (no extension) for the first figure.
+        filename_part2: Base filename (no extension) for the second figure.
+        dpi: Save resolution for exported figures.
+    """
+    if df_all is None or len(df_all) == 0:
+        print("No results found.")
+        return
+
+    part1_names = ['mAP', 'Precision', 'Recall', 'FPS']
+    part2_names = ['mUE', 'AUROC', 'FPR95', 'E-AURC']
+
+    font_keys = [
+        'font.size', 'axes.labelsize', 'xtick.labelsize', 'ytick.labelsize',
+        'legend.fontsize', 'figure.titlesize', 'axes.titlesize'
+    ]
+    prev_fonts = {k: plt.rcParams.get(k) for k in font_keys}
+    if font_scale and font_scale != 1.0:
+        for k, v in prev_fonts.items():
+            try:
+                plt.rcParams[k] = float(v) * float(font_scale)
+            except Exception:
+                pass
+
+    def _plot_part(metric_names, filename, title_prefix: str):
+        metrics_local = {name: METRICS[name] for name in metric_names if name in METRICS}
+        fig, axs = plt.subplots(1, len(metrics_local), figsize=(4*len(metrics_local), fig_height))
+        if len(metrics_local) == 1:
+            axs = [axs]
+
+        # Plot each metric's overall mean bars
+        for i, (mname, cfg) in enumerate(metrics_local.items()):
+            dfm = series_for_metric(df_all, cfg)
+            _, overall_mean = mean_by_val_across_trains(dfm)
+            ax = axs[i]
+            plot_single_bar(ax, overall_mean, cfg, title='', bar_color='black')
+
+        # Add a figure-level legend indicating bar color semantics (Best/Worst/Others)
+        legend_elements = [
+            Patch(facecolor='lightgreen', label='Best'),
+            Patch(facecolor='lightcoral', label='Worst'),
+            Patch(facecolor='black', label='Others'),
+        ]
+        # # Add super y-axis label indicating directionality for metrics
+        # fig.text(-0.005, 0.5,
+        #          'Metrics (↓ lower is better, ↑ higher is better)',
+        #          ha='center', va='center', rotation=90, fontsize=FONT_LARGE)
+        fig.legend(handles=legend_elements,
+                   loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=3)
+        # Leave room at the top for the legend
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        save_figure(fig, filename, dpi=dpi)
+        plt.show()
+
+    try:
+        _plot_part(part1_names, filename=filename_part1, title_prefix='Basic Object Detection Metrics')
+        _plot_part(part2_names, filename=filename_part2, title_prefix='Uncertainty Metrics')
+    finally:
+        # Restore original fonts
+        if font_scale and font_scale != 1.0:
+            for k, v in prev_fonts.items():
+                try:
+                    plt.rcParams[k] = v
+                except Exception:
+                    pass
 
 def _get_train_info(df):
     """Get training dataset info string."""
